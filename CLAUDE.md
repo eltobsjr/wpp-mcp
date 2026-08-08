@@ -17,7 +17,7 @@ Ao iniciar qualquer conversa neste projeto:
 - **Go 1.25** (`whatsapp-bridge/`) — client WhatsApp via [whatsmeow](https://github.com/tulir/whatsmeow), SQLite via `mattn/go-sqlite3` (sem ORM, SQL cru), API REST própria (`net/http`) só em `127.0.0.1`.
 - **Python 3.11+ / uv** (`whatsapp-mcp-server/`) — servidor MCP via `mcp[cli]` (FastMCP), fala com o bridge por HTTP (`requests`) e lê o SQLite direto.
 - **GJS / GNOME Shell 45–50** (`gnome-indicator/`) — extensão de indicador na barra superior (`PanelMenu.Button`), sem gschema/prefs (é só o toggle).
-- **systemd** (serviço de usuário) — mantém o bridge rodando sob demanda, sem autostart por padrão.
+- **systemd** (serviço de usuário) — mantém o bridge rodando; autostart habilitado por padrão (sobe sozinho a cada login).
 - **Bash** — `install.sh` (instalador guiado), `bootstrap.sh` (one-liner `curl | bash`), `Makefile` (atalhos).
 
 ## 3. Estrutura do projeto

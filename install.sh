@@ -147,7 +147,7 @@ EOF
         systemctl --user daemon-reload
         systemctl --user start "$SERVICE_NAME"
         echo "Serviço iniciado (systemctl --user status $SERVICE_NAME)."
-        if ask_yes_no "Deixar ele subir sozinho a cada login (autostart)?" n; then
+        if ask_yes_no "Deixar ele subir sozinho a cada login (autostart)?" y; then
             systemctl --user enable "$SERVICE_NAME"
             echo "Autostart habilitado."
         else

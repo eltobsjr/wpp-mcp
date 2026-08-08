@@ -24,13 +24,17 @@ const TERMINAL_CANDIDATES = [
     {bin: 'xterm', args: cmd => ['xterm', '-hold', '-e', ...cmd]},
 ];
 
+// Os labels ficam sem tradução aqui de propósito: este objeto é avaliado no
+// carregamento do módulo, antes de o Shell registrar a extensão — chamar
+// gettext() (_()) nesse ponto lança "gettext can only be called from
+// extensions". A tradução acontece no ponto de uso, em runtime (_rebuild).
 const STATE = {
-    on: {icon: 'network-transmit-receive-symbolic', cls: 'wab-icon-on', label: _('Conectado')},
-    off: {icon: 'network-offline-symbolic', cls: 'wab-icon-off', label: _('Desligado')},
-    starting: {icon: 'content-loading-symbolic', cls: 'wab-icon-pending', label: _('Iniciando…')},
-    disconnected: {icon: 'network-wired-disconnected-symbolic', cls: 'wab-icon-pending', label: _('Rodando, mas sem sessão do WhatsApp — pode precisar reescanear o QR code')},
-    pending: {icon: 'content-loading-symbolic', cls: 'wab-icon-pending', label: _('Aguarde…')},
-    error: {icon: 'dialog-warning-symbolic', cls: 'wab-icon-error', label: _('Não foi possível checar o serviço')},
+    on: {icon: 'network-transmit-receive-symbolic', cls: 'wab-icon-on', label: 'Conectado'},
+    off: {icon: 'network-offline-symbolic', cls: 'wab-icon-off', label: 'Desligado'},
+    starting: {icon: 'content-loading-symbolic', cls: 'wab-icon-pending', label: 'Iniciando…'},
+    disconnected: {icon: 'network-wired-disconnected-symbolic', cls: 'wab-icon-pending', label: 'Rodando, mas sem sessão do WhatsApp — pode precisar reescanear o QR code'},
+    pending: {icon: 'content-loading-symbolic', cls: 'wab-icon-pending', label: 'Aguarde…'},
+    error: {icon: 'dialog-warning-symbolic', cls: 'wab-icon-error', label: 'Não foi possível checar o serviço'},
 };
 
 function checkStatus(callback) {
@@ -237,7 +241,7 @@ class Indicator extends PanelMenu.Button {
         });
         const box = new St.BoxLayout({vertical: true, style_class: 'wab-header-box'});
         box.add_child(new St.Label({text: _('WhatsApp Bridge'), style_class: 'wab-header-title'}));
-        const subtitle = new St.Label({text: s.label, style_class: `wab-header-subtitle ${s.cls}`});
+        const subtitle = new St.Label({text: _(s.label), style_class: `wab-header-subtitle ${s.cls}`});
         subtitle.clutter_text.set_line_wrap(true);
         box.add_child(subtitle);
         header.add_child(box);
