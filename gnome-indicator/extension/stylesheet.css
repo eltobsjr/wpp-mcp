@@ -1,0 +1,15 @@
+.wab-header-box { spacing: 2px; padding: 4px 8px; }
+.wab-header-title { font-weight: bold; }
+.wab-header-subtitle { font-size: 0.9em; }
+
+.wab-icon-on { color: #3a944a; }
+.wab-header-subtitle.wab-icon-on { color: #3a944a; }
+
+.wab-icon-off { color: #6f8396; }
+.wab-header-subtitle.wab-icon-off { color: #6f8396; }
+
+.wab-icon-pending { color: #c88800; }
+.wab-header-subtitle.wab-icon-pending { color: #c88800; }
+
+.wab-icon-error { color: #e62d42; }
+.wab-header-subtitle.wab-icon-error { color: #e62d42; }
