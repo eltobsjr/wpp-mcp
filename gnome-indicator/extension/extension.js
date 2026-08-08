@@ -277,6 +277,12 @@ class Indicator extends PanelMenu.Button {
                 this._notifyError(_('Não foi possível abrir os logs'), _('Nenhum terminal compatível foi encontrado (ptyxis, gnome-terminal, konsole ou xterm).'));
         });
         this.menu.addMenuItem(logsItem);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        const prefsItem = new PopupMenu.PopupImageMenuItem(_('Configurações'), 'preferences-system-symbolic');
+        prefsItem.connect('activate', () => this._extension.openPreferences());
+        this.menu.addMenuItem(prefsItem);
     }
 
     _onDestroy() {
