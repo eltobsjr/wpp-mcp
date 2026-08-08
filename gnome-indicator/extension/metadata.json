@@ -4,5 +4,6 @@
   "description": "Liga e desliga a bridge do WhatsApp (whatsmeow) usada pelo MCP direto da barra superior, em vez de deixar o serviço sempre ativo em segundo plano.",
   "version-name": "0.1.0",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "url": "https://github.com/eltobsjr/wpp-mcp"
+  "url": "https://github.com/eltobsjr/wpp-mcp",
+  "settings-schema": "org.gnome.shell.extensions.whatsapp-bridge"
 }

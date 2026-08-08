@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <enum id="org.gnome.shell.extensions.whatsapp-bridge.panel-position">
+    <value nick="right"      value="0"/>
+    <value nick="left"       value="1"/>
+    <value nick="left-edge"  value="2"/>
+  </enum>
+
+  <schema id="org.gnome.shell.extensions.whatsapp-bridge"
+          path="/org/gnome/shell/extensions/whatsapp-bridge/">
+
+    <key name="panel-position" enum="org.gnome.shell.extensions.whatsapp-bridge.panel-position">
+      <default>'right'</default>
+      <summary>Posição do indicador na barra superior</summary>
+    </key>
+
+    <key name="poll-interval" type="i">
+      <default>4</default>
+      <range min="2" max="60"/>
+      <summary>Intervalo de checagem do status (segundos)</summary>
+      <description>Frequência com que o indicador consulta o systemd e o /api/status do bridge.</description>
+    </key>
+
+    <key name="show-notifications" type="b">
+      <default>true</default>
+      <summary>Mostrar notificações de erro</summary>
+      <description>Notifica quando ligar/desligar a bridge falha ou quando não é possível abrir os logs.</description>
+    </key>
+
+  </schema>
+</schemalist>

@@ -7,10 +7,19 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/extension"
 DEST="$HOME/.local/share/gnome-shell/extensions/$UUID"
 
 echo "==> Instalando WhatsApp Bridge indicator"
+
+if ! command -v glib-compile-schemas >/dev/null 2>&1; then
+    echo "ERRO: glib-compile-schemas não encontrado. Instale glib2-devel / libglib2.0-bin." >&2
+    exit 1
+fi
+
 echo "==> Copiando para $DEST"
 rm -rf "$DEST"
 mkdir -p "$DEST"
 cp -r "$SRC/." "$DEST/"
+
+echo "==> Compilando GSettings schema"
+glib-compile-schemas "$DEST/schemas"
 
 echo ""
 echo "✅ Instalado!"

@@ -2,6 +2,8 @@
 claude_desktop_config.json
 whatsapp.log
 whatsapp-bridge/wa-bridge-bin
+gnome-indicator/*.shell-extension.zip
+gnome-indicator/extension/schemas/gschemas.compiled
 
 # SecondBrain — documentação pessoal local, não faz parte do repositório
 WppMcpSecondBrain/

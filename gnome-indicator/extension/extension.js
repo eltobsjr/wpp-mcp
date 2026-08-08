@@ -10,7 +10,6 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 
 const SERVICE = 'whatsapp-bridge.service';
-const POLL_INTERVAL_S = 4;
 const BRIDGE_PORT = GLib.getenv('WHATSAPP_BRIDGE_PORT') || '9090';
 const STATUS_URL = `http://127.0.0.1:${BRIDGE_PORT}/api/status`;
 const HTTP_TIMEOUT_S = 2;
@@ -123,26 +122,39 @@ class Indicator extends PanelMenu.Button {
     _init(extension) {
         super._init(0.0, _('WhatsApp Bridge'), false);
         this._extension = extension;
+        this._settings = extension.getSettings();
         this._destroyed = false;
         this._state = 'off';
         this._pending = false;
         this._notifSource = null;
+        this._pollTimeoutId = null;
 
         this._panelIcon = new St.Icon({style_class: 'system-status-icon'});
         this.add_child(this._panelIcon);
 
         this._rebuild();
         this._poll();
-        this._pollTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, POLL_INTERVAL_S, () => {
-            if (this._destroyed)
-                return GLib.SOURCE_REMOVE;
-            this._poll();
-            return GLib.SOURCE_CONTINUE;
-        });
+        this._schedulePoll();
+
+        this._settings.connect('changed::poll-interval', () => this._schedulePoll());
 
         this.menu.connect('open-state-changed', (menu, open) => {
             if (open)
                 this._poll();
+        });
+    }
+
+    _schedulePoll() {
+        if (this._pollTimeoutId) {
+            GLib.source_remove(this._pollTimeoutId);
+            this._pollTimeoutId = null;
+        }
+        const interval = Math.max(2, this._settings.get_int('poll-interval'));
+        this._pollTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, interval, () => {
+            if (this._destroyed)
+                return GLib.SOURCE_REMOVE;
+            this._poll();
+            return GLib.SOURCE_CONTINUE;
         });
     }
 
@@ -206,6 +218,8 @@ class Indicator extends PanelMenu.Button {
     }
 
     _notifyError(title, detail) {
+        if (!this._settings.get_boolean('show-notifications'))
+            return;
         try {
             if (!this._notifSource) {
                 this._notifSource = new MessageTray.Source({
@@ -274,18 +288,49 @@ class Indicator extends PanelMenu.Button {
         this._notifSource?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
         this._notifSource = null;
         this._panelIcon = null;
+        this._settings = null;
         super._onDestroy();
     }
 });
 
 export default class WhatsAppBridgeExtension extends Extension {
     enable() {
+        this._settings = this.getSettings();
+        this._posHandler = this._settings.connect('changed::panel-position',
+            () => this._reposition());
+        this._create();
+    }
+
+    _create() {
         this._indicator = new Indicator(this);
-        Main.panel.addToStatusArea(this.uuid, this._indicator);
+        const pos = this._settings.get_string('panel-position');
+        switch (pos) {
+            case 'left':
+                Main.panel.addToStatusArea(this.uuid, this._indicator, -1, 'left');
+                break;
+            case 'left-edge':
+                Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'left');
+                break;
+            default: // 'right'
+                Main.panel.addToStatusArea(this.uuid, this._indicator);
+                break;
+        }
+    }
+
+    _reposition() {
+        delete Main.panel.statusArea[this.uuid];
+        this._indicator?.destroy();
+        this._indicator = null;
+        this._create();
     }
 
     disable() {
+        if (this._posHandler) {
+            this._settings.disconnect(this._posHandler);
+            this._posHandler = null;
+        }
         this._indicator?.destroy();
         this._indicator = null;
+        this._settings = null;
     }
 }
