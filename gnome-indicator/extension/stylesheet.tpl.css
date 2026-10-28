@@ -1,0 +1,8 @@
+.wab-header-box { spacing: 2px; padding: 4px 8px; }
+.wab-header-title { font-weight: 800; font-size: 1.1em; color: {{text}}; }
+.wab-header-subtitle { font-size: 0.82em; }
+
+.wab-icon-on, .wab-header-subtitle.wab-icon-on { color: {{ok}}; }
+.wab-icon-off, .wab-header-subtitle.wab-icon-off { color: {{off}}; }
+.wab-icon-pending, .wab-header-subtitle.wab-icon-pending { color: {{warn}}; }
+.wab-icon-error, .wab-header-subtitle.wab-icon-error { color: {{crit}}; }

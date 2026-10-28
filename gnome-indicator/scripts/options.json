@@ -1,0 +1,5 @@
+{"title":"WhatsApp Bridge","schema":"org.gnome.shell.extensions.whatsapp-bridge","settings":[
+ {"section":"Barra superior","key":"panel-position","type":"enum","label":"Posição do ícone","choices":[["right","Direita (padrão)"],["left","Esquerda"],["left-edge","Extrema esquerda"]]},
+ {"key":"show-notifications","type":"bool","label":"Avisar quando o bridge ligar, desligar ou falhar"},
+ {"section":"Atualização","key":"poll-interval","type":"int","label":"Verificar o estado a cada (s)","choices":[[4,"4 s (padrão)"],[10,"10 s"],[30,"30 s"]]}
+]}
