@@ -6,3 +6,19 @@
 .wab-icon-off, .wab-header-subtitle.wab-icon-off { color: {{off}}; }
 .wab-icon-pending, .wab-header-subtitle.wab-icon-pending { color: {{warn}}; }
 .wab-icon-error, .wab-header-subtitle.wab-icon-error { color: {{crit}}; }
+
+.wab-tabs { spacing: 4px; }
+.wab-tab { padding: 4px 10px; border-radius: 8px; font-weight: 700; color: {{text}}; }
+.wab-tab-active { background-color: rgba(128,128,128,0.25); }
+.wab-contacts { spacing: 6px; min-width: 340px; }
+.wab-contacts-scroll { max-height: 280px; }
+.wab-contacts-count { font-size: 0.8em; color: {{off}}; }
+.wab-row { spacing: 4px; padding: 2px 0; }
+.wab-row-info { padding: 3px 6px; border-radius: 6px; text-align: left; }
+.wab-row-info:hover, .wab-row-info:focus { background-color: rgba(128,128,128,0.2); }
+.wab-row-name { font-weight: 600; color: {{text}}; }
+.wab-row-phone { font-size: 0.8em; color: {{off}}; }
+.wab-icon-btn { padding: 4px 6px; border-radius: 6px; color: {{crit}}; }
+.wab-icon-btn:hover, .wab-icon-btn:focus { background-color: rgba(128,128,128,0.2); }
+.wab-form { spacing: 4px; }
+.wab-btn { padding: 4px 10px; border-radius: 8px; font-weight: 700; background-color: rgba(128,128,128,0.25); color: {{text}}; }

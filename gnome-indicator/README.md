@@ -4,6 +4,11 @@
 [wpp-mcp](../README.md) sem deixar o serviço sempre ativo. Mostra o estado (ligado,
 desligado, conectando, erro) e controla o serviço `systemd --user`.
 
+## Abas do menu
+
+- **Status** — liga/desliga a bridge, estado da conexão, logs e configurações.
+- **Contatos** — edita a agenda local (`whatsapp-bridge/store/contacts.json`, a mesma que o servidor MCP usa): busca, adicionar, editar (clique no contato) e remover. O caminho vem do `WorkingDirectory` do serviço systemd.
+
 ## Instalação
 
 ```bash

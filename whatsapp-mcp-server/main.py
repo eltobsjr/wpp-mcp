@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
+import contacts as saved_contacts
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -12,7 +13,8 @@ from whatsapp import (
     send_message as whatsapp_send_message,
     send_file as whatsapp_send_file,
     send_audio_message as whatsapp_audio_voice_message,
-    download_media as whatsapp_download_media
+    download_media as whatsapp_download_media,
+    read_message_log as whatsapp_read_message_log
 )
 
 # Initialize FastMCP server
@@ -25,8 +27,48 @@ def search_contacts(query: str) -> List[Dict[str, Any]]:
     Args:
         query: Search term to match against contact names or phone numbers
     """
-    contacts = whatsapp_search_contacts(query)
-    return contacts
+    saved = [
+        {"phone_number": c["phone"], "name": c["name"], "jid": f"{c['phone']}@s.whatsapp.net", "source": "agenda"}
+        for c in saved_contacts.list_contacts(query)
+    ]
+    seen = {c["phone_number"] for c in saved}
+    found = [c for c in whatsapp_search_contacts(query) if c.phone_number not in seen]
+    return saved + found
+
+@mcp.tool()
+def list_saved_contacts(query: Optional[str] = None) -> List[Dict[str, str]]:
+    """List the editable local contact book (takes priority over WhatsApp chat search).
+
+    Args:
+        query: Optional name or phone fragment to filter by
+    """
+    return saved_contacts.list_contacts(query)
+
+@mcp.tool()
+def save_contact(name: str, phone: str, notes: str = "") -> Dict[str, str]:
+    """Add or update a contact in the local contact book (keyed by phone number).
+
+    Args:
+        name: Contact name
+        phone: Phone number; Brazilian numbers without country code get 55 prepended
+        notes: Optional free-text notes
+    """
+    return saved_contacts.save_contact(name, phone, notes)
+
+@mcp.tool()
+def remove_saved_contact(identifier: str) -> Dict[str, int]:
+    """Remove a contact from the local contact book by phone number or exact name."""
+    return {"removed": saved_contacts.remove_contact(identifier)}
+
+@mcp.tool()
+def import_contacts_vcf(path: str) -> Dict[str, int]:
+    """Import contacts from a .vcf (vCard) file, e.g. exported from the phone's Contacts app.
+    Existing entries are kept untouched.
+
+    Args:
+        path: Absolute path to the .vcf file
+    """
+    return saved_contacts.import_vcf(path)
 
 @mcp.tool()
 def list_messages(
@@ -162,7 +204,7 @@ def send_message(
     """Send a WhatsApp message to a person or group. For group chats use the JID.
 
     Args:
-        recipient: The recipient - either a phone number with country code but no + or other symbols,
+        recipient: The recipient - a saved contact name, a phone number with country code but no + or other symbols,
                  or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
         message: The message text to send
     
@@ -177,7 +219,7 @@ def send_message(
         }
     
     # Call the whatsapp_send_message function with the unified recipient parameter
-    success, status_message = whatsapp_send_message(recipient, message)
+    success, status_message = whatsapp_send_message(saved_contacts.resolve(recipient), message)
     return {
         "success": success,
         "message": status_message
@@ -188,7 +230,7 @@ def send_file(recipient: str, media_path: str) -> Dict[str, Any]:
     """Send a file such as a picture, raw audio, video or document via WhatsApp to the specified recipient. For group messages use the JID.
     
     Args:
-        recipient: The recipient - either a phone number with country code but no + or other symbols,
+        recipient: The recipient - a saved contact name, a phone number with country code but no + or other symbols,
                  or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
         media_path: The absolute path to the media file to send (image, video, document)
     
@@ -197,7 +239,7 @@ def send_file(recipient: str, media_path: str) -> Dict[str, Any]:
     """
     
     # Call the whatsapp_send_file function
-    success, status_message = whatsapp_send_file(recipient, media_path)
+    success, status_message = whatsapp_send_file(saved_contacts.resolve(recipient), media_path)
     return {
         "success": success,
         "message": status_message
@@ -208,14 +250,14 @@ def send_audio_message(recipient: str, media_path: str) -> Dict[str, Any]:
     """Send any audio file as a WhatsApp audio message to the specified recipient. For group messages use the JID. If it errors due to ffmpeg not being installed, use send_file instead.
     
     Args:
-        recipient: The recipient - either a phone number with country code but no + or other symbols,
+        recipient: The recipient - a saved contact name, a phone number with country code but no + or other symbols,
                  or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
         media_path: The absolute path to the audio file to send (will be converted to Opus .ogg if it's not a .ogg file)
     
     Returns:
         A dictionary containing success status and a status message
     """
-    success, status_message = whatsapp_audio_voice_message(recipient, media_path)
+    success, status_message = whatsapp_audio_voice_message(saved_contacts.resolve(recipient), media_path)
     return {
         "success": success,
         "message": status_message
@@ -245,6 +287,18 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
             "success": False,
             "message": "Failed to download media"
         }
+
+@mcp.tool()
+def read_message_log(query: Optional[str] = None, limit: int = 100) -> List[str]:
+    """Read the bridge's plain-text message log, which records every message the instant
+    it arrives (before it can be deleted/revoked). Use this to recover a message's original
+    content after someone deletes it for everyone.
+
+    Args:
+        query: If provided, only lines containing this substring (case-insensitive) are returned
+        limit: Maximum number of matching lines to return, most recent first
+    """
+    return whatsapp_read_message_log(query=query, limit=limit)
 
 if __name__ == "__main__":
     # Initialize and run the server

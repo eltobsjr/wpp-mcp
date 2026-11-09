@@ -36,6 +36,56 @@ const STATE = {
     error: {icon: 'dialog-warning-symbolic', cls: 'wab-icon-error', label: 'Não foi possível checar o serviço'},
 };
 
+
+// ---- Agenda de contatos (mesmo arquivo que o servidor MCP lê) ----
+const CONTACTS_RENDER_LIMIT = 60;
+
+function contactsFilePath() {
+    const fallback = GLib.build_filenamev([GLib.get_home_dir(), 'tools', 'wpp-mcp', 'whatsapp-bridge', 'store', 'contacts.json']);
+    try {
+        // Descobre o diretório do bridge pelo WorkingDirectory do serviço systemd.
+        const unit = GLib.build_filenamev([GLib.get_user_config_dir(), 'systemd', 'user', SERVICE]);
+        const [ok, bytes] = GLib.file_get_contents(unit);
+        if (ok) {
+            const m = new TextDecoder().decode(bytes).match(/^WorkingDirectory=(.+)$/m);
+            if (m)
+                return GLib.build_filenamev([m[1].trim(), 'store', 'contacts.json']);
+        }
+    } catch (e) {
+        // cai no caminho padrão
+    }
+    return fallback;
+}
+
+function loadContacts() {
+    try {
+        const [ok, bytes] = GLib.file_get_contents(contactsFilePath());
+        if (!ok)
+            return [];
+        return JSON.parse(new TextDecoder().decode(bytes)).contacts ?? [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function saveContacts(contacts) {
+    contacts.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    const data = JSON.stringify({contacts}, null, 2);
+    const file = Gio.File.new_for_path(contactsFilePath());
+    file.replace_contents(new TextEncoder().encode(data), null, false,
+        Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+}
+
+// Mesma regra do contacts.py: só dígitos; 10-11 dígitos sem DDI ganham 55.
+function normalizePhone(raw) {
+    let d = (raw ?? '').replace(/\D/g, '');
+    if (d.startsWith('00'))
+        d = d.slice(2);
+    if (d.length === 10 || d.length === 11)
+        d = `55${d}`;
+    return d;
+}
+
 function checkStatus(callback) {
     try {
         const proc = Gio.Subprocess.new(
@@ -126,6 +176,8 @@ class Indicator extends PanelMenu.Button {
         this._destroyed = false;
         this._state = 'off';
         this._pending = false;
+        this._tab = 'status';
+        this._editingPhone = null;
         this._notifSource = null;
         this._pollTimeoutId = null;
 
@@ -139,8 +191,11 @@ class Indicator extends PanelMenu.Button {
         this._settings.connect('changed::poll-interval', () => this._schedulePoll());
 
         this.menu.connect('open-state-changed', (menu, open) => {
-            if (open)
+            if (open) {
                 this._poll();
+                if (this._tab === 'contacts')
+                    this._rebuild(); // recarrega do disco
+            }
         });
     }
 
@@ -165,7 +220,8 @@ class Indicator extends PanelMenu.Button {
         const s = STATE[state] ?? STATE.error;
         this._panelIcon.icon_name = s.icon;
         this._panelIcon.style_class = `system-status-icon ${s.cls}`;
-        this._rebuild();
+        if (this._tab === 'status') // não destrói a aba de contatos (e o foco da busca) a cada poll
+            this._rebuild();
     }
 
     _poll() {
@@ -243,10 +299,149 @@ class Indicator extends PanelMenu.Button {
         }
     }
 
+
+    _addTabBar() {
+        const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
+        const bar = new St.BoxLayout({style_class: 'wab-tabs', x_expand: true});
+        for (const [id, text] of [['status', _('Status')], ['contacts', _('Contatos')]]) {
+            const btn = new St.Button({
+                label: text, can_focus: true, x_expand: true,
+                style_class: `wab-tab${this._tab === id ? ' wab-tab-active' : ''}`,
+            });
+            btn.connect('clicked', () => {
+                if (this._tab === id)
+                    return;
+                this._tab = id;
+                this._rebuild();
+            });
+            bar.add_child(btn);
+        }
+        item.add_child(bar);
+        this.menu.addMenuItem(item);
+    }
+
+    _buildContactsTab() {
+        const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
+        const box = new St.BoxLayout({vertical: true, x_expand: true, style_class: 'wab-contacts'});
+
+        this._search = new St.Entry({hint_text: _('Buscar contato…'), can_focus: true, style_class: 'wab-entry'});
+        this._search.clutter_text.connect('text-changed', () => this._renderContacts());
+        box.add_child(this._search);
+
+        this._scroll = new St.ScrollView({style_class: 'wab-contacts-scroll', overlay_scrollbars: true});
+        this._list = new St.BoxLayout({vertical: true});
+        this._scroll.set_child(this._list);
+        box.add_child(this._scroll);
+
+        this._countLabel = new St.Label({style_class: 'wab-contacts-count'});
+        box.add_child(this._countLabel);
+
+        const form = new St.BoxLayout({style_class: 'wab-form'});
+        this._nameEntry = new St.Entry({hint_text: _('Nome'), can_focus: true, x_expand: true, style_class: 'wab-entry'});
+        this._phoneEntry = new St.Entry({hint_text: _('Telefone'), can_focus: true, x_expand: true, style_class: 'wab-entry'});
+        this._saveBtn = new St.Button({label: _('Salvar'), can_focus: true, style_class: 'wab-btn'});
+        this._saveBtn.connect('clicked', () => this._saveFromForm());
+        this._phoneEntry.clutter_text.connect('activate', () => this._saveFromForm());
+        this._nameEntry.clutter_text.connect('activate', () => this._phoneEntry.grab_key_focus());
+        form.add_child(this._nameEntry);
+        form.add_child(this._phoneEntry);
+        form.add_child(this._saveBtn);
+        box.add_child(form);
+
+        item.add_child(box);
+        this.menu.addMenuItem(item);
+        this._contacts = loadContacts();
+        this._renderContacts();
+        this._search.grab_key_focus();
+    }
+
+    _renderContacts() {
+        if (!this._list)
+            return;
+        this._list.destroy_all_children();
+        const q = this._search.get_text().trim().toLowerCase();
+        const qd = q.replace(/\D/g, '');
+        const matches = this._contacts.filter(c =>
+            !q || c.name.toLowerCase().includes(q) || (qd && c.phone.includes(qd)));
+        this._countLabel.text = matches.length > CONTACTS_RENDER_LIMIT
+            ? _('Mostrando %d de %d — refine a busca').format(CONTACTS_RENDER_LIMIT, matches.length)
+            : _('%d contatos').format(matches.length);
+
+        for (const c of matches.slice(0, CONTACTS_RENDER_LIMIT)) {
+            const row = new St.BoxLayout({style_class: 'wab-row'});
+            const info = new St.Button({can_focus: true, x_expand: true, style_class: 'wab-row-info'});
+            const col = new St.BoxLayout({vertical: true});
+            col.add_child(new St.Label({text: c.name, style_class: 'wab-row-name'}));
+            col.add_child(new St.Label({text: c.phone, style_class: 'wab-row-phone'}));
+            info.set_child(col);
+            // clicar edita: preenche o formulário com o contato
+            info.connect('clicked', () => {
+                this._editingPhone = c.phone;
+                this._nameEntry.set_text(c.name);
+                this._phoneEntry.set_text(c.phone);
+                this._saveBtn.label = _('Atualizar');
+                this._nameEntry.grab_key_focus();
+            });
+            row.add_child(info);
+
+            const del = new St.Button({
+                child: new St.Icon({icon_name: 'user-trash-symbolic', icon_size: 14}),
+                can_focus: true, style_class: 'wab-icon-btn',
+            });
+            del.connect('clicked', () => {
+                this._contacts = this._contacts.filter(x => x.phone !== c.phone);
+                this._persist();
+                this._renderContacts();
+            });
+            row.add_child(del);
+            this._list.add_child(row);
+        }
+    }
+
+    _persist() {
+        try {
+            saveContacts(this._contacts);
+        } catch (e) {
+            logError(e, 'whatsapp-bridge: falha ao salvar contacts.json');
+            this._notifyError(_('Não foi possível salvar os contatos'), String(e.message ?? e));
+        }
+    }
+
+    _saveFromForm() {
+        const name = this._nameEntry.get_text().trim();
+        const phone = normalizePhone(this._phoneEntry.get_text());
+        if (!name || !phone)
+            return;
+        // recarrega do disco: o MCP ou o usuário podem ter editado o arquivo
+        this._contacts = loadContacts();
+        const oldPhone = this._editingPhone ?? phone;
+        const existing = this._contacts.find(c => c.phone === oldPhone);
+        if (existing) {
+            existing.name = name;
+            existing.phone = phone;
+        } else {
+            this._contacts.push({name, phone, notes: ''});
+        }
+        // se o telefone mudou e colide com outro, mantém um só
+        this._contacts = this._contacts.filter((c, i, a) => a.findIndex(x => x.phone === c.phone) === i);
+        this._persist();
+        this._editingPhone = null;
+        this._nameEntry.set_text('');
+        this._phoneEntry.set_text('');
+        this._saveBtn.label = _('Salvar');
+        this._renderContacts();
+    }
+
     _rebuild() {
         if (this._destroyed)
             return;
         this.menu.removeAll();
+
+        this._addTabBar();
+        if (this._tab === 'contacts') {
+            this._buildContactsTab();
+            return;
+        }
 
         const s = STATE[this._state] ?? STATE.error;
 
@@ -295,6 +490,7 @@ class Indicator extends PanelMenu.Button {
         this._notifSource = null;
         this._panelIcon = null;
         this._settings = null;
+        this._list = null;
         super._onDestroy();
     }
 });

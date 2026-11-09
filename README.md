@@ -224,7 +224,9 @@ Depois de conectado, é só conversar com o Claude normalmente — ele decide qu
 
 ### Ferramentas disponíveis no MCP
 
-- **search_contacts** — busca contatos por nome ou número
+- **search_contacts** — busca contatos por nome ou número (agenda local primeiro, depois os chats do WhatsApp)
+- **list_saved_contacts** / **save_contact** / **remove_saved_contact** — gerenciam a agenda local editável
+- **import_contacts_vcf** — importa contatos de um arquivo `.vcf` exportado do celular
 - **list_messages** — lista mensagens com filtros e contexto opcionais
 - **list_chats** — lista os chats disponíveis com metadados
 - **get_chat** — informações de um chat específico
@@ -236,6 +238,19 @@ Depois de conectado, é só conversar com o Claude normalmente — ele decide qu
 - **send_file** — envia arquivo (imagem, vídeo, áudio bruto, documento)
 - **send_audio_message** — envia áudio como mensagem de voz do WhatsApp (precisa ser `.ogg` opus, ou ter o ffmpeg instalado)
 - **download_media** — baixa a mídia de uma mensagem e retorna o caminho local do arquivo
+
+### Agenda de contatos local
+
+A busca de contatos pelos chats do WhatsApp às vezes falha, então existe uma agenda própria em `whatsapp-bridge/store/contacts.json` (fora do git, tem dados pessoais). Formato:
+
+```json
+{"contacts": [{"name": "Maria", "phone": "5511999998888", "notes": ""}]}
+```
+
+- Pode ser editada à mão, pelas tools `save_contact`/`remove_saved_contact` ou pela aba **Contatos** do indicador do GNOME.
+- `search_contacts` mostra a agenda primeiro; `send_message`, `send_file` e `send_audio_message` aceitam o **nome** de um contato salvo no lugar do número.
+- Telefones são normalizados para só dígitos; números BR com 10 ou 11 dígitos ganham o `55`.
+- **Importar do celular:** no app Contatos, Gerenciar contatos → Exportar → `.vcf`, e peça ao Claude para rodar `import_contacts_vcf` com o caminho do arquivo. Entradas já existentes não são sobrescritas.
 
 ### Envio e recebimento de mídia
 
