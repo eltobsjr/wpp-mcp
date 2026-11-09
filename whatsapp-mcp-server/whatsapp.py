@@ -16,6 +16,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
 logger = logging.getLogger("whatsapp-mcp")
 
 MESSAGES_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db')
+MESSAGE_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'mensagens_log.txt')
 WHATSAPP_BRIDGE_PORT = os.environ.get("WHATSAPP_BRIDGE_PORT", "9090")
 WHATSAPP_API_BASE_URL = f"http://localhost:{WHATSAPP_BRIDGE_PORT}/api"
 REQUEST_TIMEOUT_S = 10
@@ -775,3 +776,26 @@ def download_media(message_id: str, chat_jid: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return None
+
+def read_message_log(query: Optional[str] = None, limit: int = 100) -> List[str]:
+    """Read raw lines from the bridge's plain-text message log.
+
+    The bridge (main.go) appends every message to this file the instant it arrives,
+    before it can be revoked/deleted, so it's the durable record for messages that
+    were later deleted for everyone.
+
+    Args:
+        query: If provided, only lines containing this substring (case-insensitive) are returned
+        limit: Maximum number of matching lines to return, most recent first
+    """
+    if not os.path.exists(MESSAGE_LOG_PATH):
+        return []
+
+    with open(MESSAGE_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+        lines = [line.rstrip("\n") for line in f]
+
+    if query:
+        query_lower = query.lower()
+        lines = [line for line in lines if query_lower in line.lower()]
+
+    return lines[-limit:][::-1]

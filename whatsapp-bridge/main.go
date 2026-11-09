@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"mime"
 	"net/http"
 	"os"
 	"os/signal"
@@ -280,7 +281,10 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 		// Document types (for any other file type)
 		default:
 			mediaType = whatsmeow.MediaDocument
-			mimeType = "application/octet-stream"
+			mimeType = mime.TypeByExtension("." + fileExt)
+			if mimeType == "" {
+				mimeType = "application/octet-stream"
+			}
 		}
 
 		// Upload media to WhatsApp servers
@@ -346,8 +350,10 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 				FileLength:    &resp.FileLength,
 			}
 		case whatsmeow.MediaDocument:
+			docName := mediaPath[strings.LastIndex(mediaPath, "/")+1:]
 			msg.DocumentMessage = &waProto.DocumentMessage{
-				Title:         proto.String(mediaPath[strings.LastIndex(mediaPath, "/")+1:]),
+				Title:         proto.String(docName),
+				FileName:      proto.String(docName), // sem isso o celular mostra o arquivo como .bin
 				Caption:       proto.String(message),
 				Mimetype:      proto.String(mimeType),
 				URL:           &resp.URL,
@@ -410,6 +416,30 @@ func extractMediaInfo(msg *waProto.Message) (mediaType string, filename string, 
 }
 
 // Handle regular incoming messages with media support
+// messageLogPath is the plain-text, append-only log that survives message deletion:
+// it is written the instant a message arrives, before the sender has any chance to
+// revoke ("delete for everyone") or the app to delete locally.
+const messageLogPath = "store/mensagens_log.txt"
+
+// logMessageEvent appends one line to messageLogPath. Opened/closed per call (instead of
+// keeping a handle open) so every write is flushed to disk immediately.
+func logMessageEvent(chatJID, chatName, sender string, timestamp time.Time, isFromMe bool, body string) {
+	f, err := os.OpenFile(messageLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	direction := "recebida de"
+	if isFromMe {
+		direction = "enviada para"
+	}
+
+	line := fmt.Sprintf("[%s] %s %s (%s) | remetente=%s | %s\n",
+		timestamp.Format("2006-01-02 15:04:05"), direction, chatName, chatJID, sender, body)
+	f.WriteString(line)
+}
+
 func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *events.Message, logger waLog.Logger) {
 	// Save message to database
 	chatJID := msg.Info.Chat.String()
@@ -424,6 +454,14 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		logger.Warnf("Failed to store chat: %v", err)
 	}
 
+	// A "delete for everyone" arrives as its own revoke event, carrying no text/media of
+	// its own — record the deletion itself, since the message body below already logged
+	// the original content when it first arrived.
+	if proto := msg.Message.GetProtocolMessage(); proto != nil && proto.GetType() == waProto.ProtocolMessage_REVOKE {
+		logMessageEvent(chatJID, name, sender, msg.Info.Timestamp, msg.Info.IsFromMe,
+			fmt.Sprintf("[MENSAGEM APAGADA - id original: %s]", proto.GetKey().GetID()))
+	}
+
 	// Extract text content
 	content := extractTextContent(msg.Message)
 
@@ -434,6 +472,18 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	if content == "" && mediaType == "" {
 		return
 	}
+
+	// Log to plain text immediately, ahead of the SQLite write below, so the content is
+	// safe even if it gets revoked a moment later or the DB write fails.
+	body := content
+	if mediaType != "" {
+		if body != "" {
+			body = fmt.Sprintf("%s [%s: %s]", body, mediaType, filename)
+		} else {
+			body = fmt.Sprintf("[%s: %s]", mediaType, filename)
+		}
+	}
+	logMessageEvent(chatJID, name, sender, msg.Info.Timestamp, msg.Info.IsFromMe, body)
 
 	// Store message in database
 	err = messageStore.StoreMessage(
