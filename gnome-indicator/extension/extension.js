@@ -76,6 +76,27 @@ function saveContacts(contacts) {
         Gio.FileCreateFlags.REPLACE_DESTINATION, null);
 }
 
+
+// ---- Modo conversacional (mesmo arquivo que o MCP e o vigia usam) ----
+function conversationFilePath() {
+    return GLib.build_filenamev([GLib.path_get_dirname(contactsFilePath()), 'conversation_mode.json']);
+}
+
+function loadConversation() {
+    try {
+        const [ok, bytes] = GLib.file_get_contents(conversationFilePath());
+        return ok ? JSON.parse(new TextDecoder().decode(bytes)) : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function saveConversation(state) {
+    const file = Gio.File.new_for_path(conversationFilePath());
+    file.replace_contents(new TextEncoder().encode(JSON.stringify(state, null, 2)), null, false,
+        Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+}
+
 // Mesma regra do contacts.py: só dígitos; 10-11 dígitos sem DDI ganham 55.
 function normalizePhone(raw) {
     let d = (raw ?? '').replace(/\D/g, '');
@@ -432,6 +453,29 @@ class Indicator extends PanelMenu.Button {
         this._renderContacts();
     }
 
+    _toggleConversation(enable) {
+        try {
+            const state = loadConversation();
+            if (enable && !(state.agent_id && state.routine_id)) {
+                this._notifyError(_('Modo conversacional'),
+                    _('Configure a rotina do OpenBot antes de ligar (ferramenta conversation_mode).'));
+                this._rebuild();
+                return;
+            }
+            state.enabled = enable;
+            if (enable) {
+                // cursor vazio: o vigia começa do ponto atual e não responde o histórico
+                state.cursor = null;
+                state.enabled_at = new Date().toISOString().slice(0, 19);
+            }
+            saveConversation(state);
+        } catch (e) {
+            logError(e, 'whatsapp-bridge: falha ao salvar conversation_mode.json');
+            this._notifyError(_('Não foi possível alterar o modo conversacional'), String(e.message ?? e));
+            this._rebuild();
+        }
+    }
+
     _rebuild() {
         if (this._destroyed)
             return;
@@ -465,6 +509,11 @@ class Indicator extends PanelMenu.Button {
         toggleItem.setSensitive(!this._pending);
         toggleItem.connect('activate', () => this._toggle());
         this.menu.addMenuItem(toggleItem);
+
+        const conv = loadConversation();
+        const convItem = new PopupMenu.PopupSwitchMenuItem(_('Modo conversacional'), !!conv.enabled);
+        convItem.connect('toggled', (_item, state) => this._toggleConversation(state));
+        this.menu.addMenuItem(convItem);
 
         const logsItem = new PopupMenu.PopupImageMenuItem(_('Ver logs'), 'utilities-terminal-symbolic');
         logsItem.connect('activate', () => {
