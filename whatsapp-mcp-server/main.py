@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
 import contacts as saved_contacts
+import identity
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -22,8 +23,11 @@ mcp = FastMCP("whatsapp")
 
 @mcp.tool()
 def search_contacts(query: str) -> List[Dict[str, Any]]:
-    """Search WhatsApp contacts by name or phone number.
-    
+    """Search contacts by name or phone number.
+
+    Looks in the local contact book first; only if nothing matches there
+    does it fall back to searching WhatsApp chats.
+
     Args:
         query: Search term to match against contact names or phone numbers
     """
@@ -31,9 +35,9 @@ def search_contacts(query: str) -> List[Dict[str, Any]]:
         {"phone_number": c["phone"], "name": c["name"], "jid": f"{c['phone']}@s.whatsapp.net", "source": "agenda"}
         for c in saved_contacts.list_contacts(query)
     ]
-    seen = {c["phone_number"] for c in saved}
-    found = [c for c in whatsapp_search_contacts(query) if c.phone_number not in seen]
-    return saved + found
+    if saved:
+        return saved
+    return whatsapp_search_contacts(query)
 
 @mcp.tool()
 def list_saved_contacts(query: Optional[str] = None) -> List[Dict[str, str]]:
@@ -53,12 +57,16 @@ def save_contact(name: str, phone: str, notes: str = "") -> Dict[str, str]:
         phone: Phone number; Brazilian numbers without country code get 55 prepended
         notes: Optional free-text notes
     """
-    return saved_contacts.save_contact(name, phone, notes)
+    saved = saved_contacts.save_contact(name, phone, notes)
+    identity.invalidate()
+    return saved
 
 @mcp.tool()
 def remove_saved_contact(identifier: str) -> Dict[str, int]:
     """Remove a contact from the local contact book by phone number or exact name."""
-    return {"removed": saved_contacts.remove_contact(identifier)}
+    removed = saved_contacts.remove_contact(identifier)
+    identity.invalidate()
+    return {"removed": removed}
 
 @mcp.tool()
 def import_contacts_vcf(path: str) -> Dict[str, int]:
@@ -68,7 +76,9 @@ def import_contacts_vcf(path: str) -> Dict[str, int]:
     Args:
         path: Absolute path to the .vcf file
     """
-    return saved_contacts.import_vcf(path)
+    result = saved_contacts.import_vcf(path)
+    identity.invalidate()
+    return result
 
 @mcp.tool()
 def list_messages(

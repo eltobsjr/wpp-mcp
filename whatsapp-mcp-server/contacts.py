@@ -12,6 +12,8 @@ import re
 import tempfile
 from typing import Dict, List, Optional
 
+from textutil import fold, phone_keys
+
 CONTACTS_PATH = os.environ.get("WHATSAPP_CONTACTS_FILE") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "whatsapp-bridge", "store", "contacts.json"
 )
@@ -45,12 +47,15 @@ def _save(contacts: List[Dict[str, str]]) -> None:
 
 
 def list_contacts(query: Optional[str] = None) -> List[Dict[str, str]]:
+    """Sem query, todos. Com query: todas as palavras no nome (sem acento/maiúscula)
+    ou o telefone contendo os dígitos (aceita número com ou sem o 9º dígito)."""
     contacts = _load()
     if query:
-        q = query.lower()
+        words = fold(query).split()
         qd = re.sub(r"\D", "", query)
         contacts = [c for c in contacts
-                    if q in c["name"].lower() or (qd and qd in c["phone"])]
+                    if (words and all(w in fold(c["name"]) for w in words))
+                    or (len(qd) >= 4 and any(qd in k for k in phone_keys(c["phone"])))]
     return contacts
 
 

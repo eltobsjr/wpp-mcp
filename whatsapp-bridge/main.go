@@ -56,7 +56,7 @@ func NewMessageStore() (*MessageStore, error) {
 	}
 
 	// Open SQLite database for messages
-	db, err := sql.Open("sqlite3", "file:store/messages.db?_foreign_keys=on")
+	db, err := sql.Open("sqlite3", "file:store/messages.db?_foreign_keys=on&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open message database: %v", err)
 	}
@@ -86,6 +86,10 @@ func NewMessageStore() (*MessageStore, error) {
 			PRIMARY KEY (id, chat_jid),
 			FOREIGN KEY (chat_jid) REFERENCES chats(jid)
 		);
+
+		CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages(chat_jid, timestamp);
+		CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
+		CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender);
 	`)
 	if err != nil {
 		db.Close()
@@ -102,8 +106,15 @@ func (store *MessageStore) Close() error {
 
 // Store a chat in the database
 func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time) error {
+	// Upsert em vez de INSERT OR REPLACE: uma mensagem antiga (histórico) não pode
+	// empurrar last_message_time para trás, e um nome real não é trocado por vazio.
 	_, err := store.db.Exec(
-		"INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)",
+		`INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
+		 ON CONFLICT(jid) DO UPDATE SET
+		   name = CASE WHEN excluded.name != '' THEN excluded.name ELSE chats.name END,
+		   last_message_time = CASE WHEN chats.last_message_time IS NULL
+		                             OR excluded.last_message_time > chats.last_message_time
+		                            THEN excluded.last_message_time ELSE chats.last_message_time END`,
 		jid, name, lastMessageTime,
 	)
 	return err
@@ -936,9 +947,11 @@ func main() {
 		case *events.HistorySync:
 			// Process history sync events
 			handleHistorySync(client, messageStore, v, logger)
+			go backfillChatNames(client, messageStore)
 
 		case *events.Connected:
 			logger.Infof("Connected to WhatsApp")
+			go backfillChatNames(client, messageStore)
 
 		case *events.LoggedOut:
 			logger.Warnf("Device logged out, please scan QR code to log in again")
@@ -1000,6 +1013,14 @@ func main() {
 	// Start REST API server
 	startRESTServer(client, messageStore, bridgePort())
 
+	// Contatos e o mapa LID->telefone chegam depois dos chats: revisa os nomes de tempos em tempos.
+	go func() {
+		backfillChatNames(client, messageStore)
+		for range time.Tick(10 * time.Minute) {
+			backfillChatNames(client, messageStore)
+		}
+	}()
+
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
 	signal.Notify(exitChan, syscall.SIGINT, syscall.SIGTERM)
@@ -1019,8 +1040,8 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 	// First, check if chat already exists in database with a name
 	var existingName string
 	err := messageStore.db.QueryRow("SELECT name FROM chats WHERE jid = ?", chatJID).Scan(&existingName)
-	if err == nil && existingName != "" {
-		// Chat exists with a name, use that
+	if err == nil && existingName != "" && !isPlaceholderName(existingName, jid) {
+		// Chat exists with a real name, use that
 		logger.Infof("Using existing chat name for %s: %s", chatJID, existingName)
 		return existingName
 	}
@@ -1079,10 +1100,10 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 		// This is an individual contact
 		logger.Infof("Getting name for contact: %s", chatJID)
 
-		// Just use contact info (full name)
-		contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
-		if err == nil && contact.FullName != "" {
-			name = contact.FullName
+		// Contatos ficam gravados pelo telefone, mas o chat pode vir como @lid:
+		// resolveContactName converte LID -> telefone antes de procurar o nome.
+		if n := resolveContactName(client, jid); n != "" {
+			name = n
 		} else if sender != "" {
 			// Fallback to sender
 			name = sender
@@ -1095,6 +1116,83 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 	}
 
 	return name
+}
+
+
+// isPlaceholderName diz se o nome gravado é só um número/ID (ou o "Group N" de fallback),
+// ou seja, ainda vale a pena tentar resolver um nome de verdade.
+func isPlaceholderName(name string, jid types.JID) bool {
+	if name == "" || name == jid.User {
+		return true
+	}
+	if jid.Server == types.GroupServer && strings.HasPrefix(name, "Group ") {
+		return true
+	}
+	for _, r := range name {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// resolveContactName procura o nome de um contato, convertendo @lid em telefone
+// (whatsmeow_lid_map) e aceitando nome completo, primeiro nome, comercial ou push name.
+func resolveContactName(client *whatsmeow.Client, jid types.JID) string {
+	ctx := context.Background()
+	candidates := []types.JID{jid}
+	if jid.Server == types.HiddenUserServer {
+		if pn, err := client.Store.LIDs.GetPNForLID(ctx, jid); err == nil && !pn.IsEmpty() {
+			candidates = []types.JID{pn, jid}
+		}
+	}
+	for _, c := range candidates {
+		info, err := client.Store.Contacts.GetContact(ctx, c)
+		if err != nil {
+			continue
+		}
+		for _, n := range []string{info.FullName, info.FirstName, info.BusinessName, info.PushName} {
+			if n != "" {
+				return n
+			}
+		}
+	}
+	return ""
+}
+
+// backfillChatNames corrige chats individuais que ficaram com o número no lugar do nome.
+func backfillChatNames(client *whatsmeow.Client, store *MessageStore) {
+	rows, err := store.db.Query(`SELECT jid, COALESCE(name, '') FROM chats
+		WHERE jid LIKE '%@lid' OR jid LIKE '%@s.whatsapp.net'`)
+	if err != nil {
+		fmt.Printf("backfill de nomes: %v\n", err)
+		return
+	}
+	type chatRow struct{ jid, name string }
+	var all []chatRow
+	for rows.Next() {
+		var r chatRow
+		if rows.Scan(&r.jid, &r.name) == nil {
+			all = append(all, r)
+		}
+	}
+	rows.Close()
+
+	fixed := 0
+	for _, r := range all {
+		jid, err := types.ParseJID(r.jid)
+		if err != nil || !isPlaceholderName(r.name, jid) {
+			continue
+		}
+		if n := resolveContactName(client, jid); n != "" && n != r.name {
+			if _, err := store.db.Exec("UPDATE chats SET name = ? WHERE jid = ?", n, r.jid); err == nil {
+				fixed++
+			}
+		}
+	}
+	if fixed > 0 {
+		fmt.Printf("Nomes de chats corrigidos: %d\n", fixed)
+	}
 }
 
 // Handle history sync events
