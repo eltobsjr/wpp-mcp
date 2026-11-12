@@ -206,3 +206,27 @@ def test_ferramenta_conversation_mode(env):
     conversation.update(routine_id="")
     erro = main.conversation_mode(enabled=True)
     assert erro["success"] is False and "routine_id" in erro["message"]
+
+
+def test_cli_status_ligar_desligar_e_contato(env, capsys):
+    assert conversation.cli(["status"]) == 0
+    assert "desligado" in capsys.readouterr().out
+    assert conversation.cli(["on"]) == 0
+    assert "LIGADO" in capsys.readouterr().out
+    assert conversation.cli(["contact", "Ana", "auto"]) == 0
+    assert "Ana (auto)" in capsys.readouterr().out
+    assert contacts.get_profile("Ana")["reply_mode"] == "auto"
+    assert conversation.cli(["contact", "5511999990000", "off"]) == 0
+    assert "Ana" not in capsys.readouterr().out.split("Contatos atendidos")[1]
+    assert conversation.cli(["off"]) == 0
+    assert "desligado" in capsys.readouterr().out
+
+
+def test_cli_erros(env, capsys):
+    assert conversation.cli(["contact", "Fulano", "draft"]) == 1
+    assert "não encontrado" in capsys.readouterr().err
+    assert conversation.cli(["contact", "Ana", "sempre"]) == 1
+    assert "modo deve ser" in capsys.readouterr().err
+    conversation.update(routine_id="")
+    assert conversation.cli(["on"]) == 1
+    assert conversation.cli(["xyz"]) == 2

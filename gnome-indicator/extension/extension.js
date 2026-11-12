@@ -405,6 +405,15 @@ class Indicator extends PanelMenu.Button {
             });
             row.add_child(info);
 
+            // Escolhe em quais contatos o modo conversacional atua: off -> rascunho -> auto -> off
+            const mode = c.profile?.reply_mode ?? 'off';
+            const modeBtn = new St.Button({
+                label: {off: _('Conversa: off'), draft: _('Conversa: rascunho'), auto: _('Conversa: AUTO')}[mode] ?? _('Conversa: off'),
+                can_focus: true, style_class: 'wab-btn',
+            });
+            modeBtn.connect('clicked', () => this._cycleReplyMode(c.phone));
+            row.add_child(modeBtn);
+
             const del = new St.Button({
                 child: new St.Icon({icon_name: 'user-trash-symbolic', icon_size: 14}),
                 can_focus: true, style_class: 'wab-icon-btn',
@@ -417,6 +426,20 @@ class Indicator extends PanelMenu.Button {
             row.add_child(del);
             this._list.add_child(row);
         }
+    }
+
+    _cycleReplyMode(phone) {
+        // recarrega do disco: o MCP ou o usuário podem ter editado o arquivo
+        this._contacts = loadContacts();
+        const c = this._contacts.find(x => x.phone === phone);
+        if (!c)
+            return;
+        const order = ['off', 'draft', 'auto'];
+        const current = c.profile?.reply_mode ?? 'off';
+        const next = order[(order.indexOf(current) + 1) % order.length];
+        c.profile = {...(c.profile ?? {}), reply_mode: next};
+        this._persist();
+        this._renderContacts();
     }
 
     _persist() {
@@ -511,7 +534,9 @@ class Indicator extends PanelMenu.Button {
         this.menu.addMenuItem(toggleItem);
 
         const conv = loadConversation();
-        const convItem = new PopupMenu.PopupSwitchMenuItem(_('Modo conversacional'), !!conv.enabled);
+        const served = loadContacts().filter(c => ['draft', 'auto'].includes(c.profile?.reply_mode)).length;
+        const convItem = new PopupMenu.PopupSwitchMenuItem(
+            _('Modo conversacional (%d contatos)').format(served), !!conv.enabled);
         convItem.connect('toggled', (_item, state) => this._toggleConversation(state));
         this.menu.addMenuItem(convItem);
 

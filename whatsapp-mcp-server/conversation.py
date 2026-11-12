@@ -15,7 +15,11 @@ Travas (todas valem juntas):
   - limite de acionamentos por conversa por hora;
   - o vigia não escreve no banco do bridge nem envia mensagens: só acorda o agente.
 
-Rodar:  python conversation.py watch [--interval 2]
+Comandos (python conversation.py ...; atalhos em `make conv-*`):
+  watch [--interval 2]        roda o vigia (é o que o serviço systemd executa)
+  status                      mostra se está ligado e quais contatos são atendidos
+  on | off                    liga / desliga o modo
+  contact <nome|fone> <modo>  modo: off | draft (só rascunho) | auto (envia sozinho)
 """
 import contextlib
 import fcntl
@@ -292,10 +296,53 @@ def watch(interval: float = 2.0) -> None:
         time.sleep(interval)
 
 
+def status_text() -> str:
+    state = load()
+    people = eligible_contacts()
+    lines = [
+        f"Modo conversacional: {'LIGADO' if state['enabled'] else 'desligado'}"
+        + (f" (desde {state['enabled_at']})" if state["enabled"] and state["enabled_at"] else ""),
+        f"Rotina do OpenBot: {'configurada' if state['agent_id'] and state['routine_id'] else 'NÃO configurada'}",
+        f"Debounce {state['debounce_seconds']} s, limite {state['max_triggers_per_hour']} acionamentos/hora por conversa",
+        f"Contatos atendidos: {len(people)}",
+    ]
+    lines += [f"  - {p['name']} ({p['reply_mode']})" for p in people]
+    if not people:
+        lines.append("  (nenhum: escolha com `conversation.py contact <nome ou telefone> draft`)")
+    return "\n".join(lines)
+
+
+def cli(argv: List[str]) -> int:
+    cmd = argv[0] if argv else ""
+    try:
+        if cmd == "watch":
+            watch(float(argv[argv.index("--interval") + 1]) if "--interval" in argv else 2.0)
+        elif cmd == "on":
+            set_enabled(True)
+            print(status_text())
+        elif cmd == "off":
+            set_enabled(False)
+            print(status_text())
+        elif cmd == "status":
+            print(status_text())
+        elif cmd == "contact" and len(argv) == 3:
+            if argv[2] not in contacts.REPLY_MODES:
+                raise ValueError(f"modo deve ser um de: {', '.join(contacts.REPLY_MODES)}")
+            contacts.set_profile(argv[1], reply_mode=argv[2])
+            print(status_text())
+        else:
+            print(__doc__)
+            return 2
+    except contacts.RecipientError as e:
+        print(f"Erro: {e}", file=sys.stderr)
+        for c in e.candidates:
+            print(f"  candidato: {c['name']} ({c['phone']})", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(f"Erro: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 if __name__ == "__main__":
-    if len(sys.argv) >= 2 and sys.argv[1] == "watch":
-        every = float(sys.argv[sys.argv.index("--interval") + 1]) if "--interval" in sys.argv else 2.0
-        watch(every)
-    else:
-        print(__doc__)
-        sys.exit(2)
+    sys.exit(cli(sys.argv[1:]))

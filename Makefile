@@ -1,7 +1,7 @@
 SERVICE = whatsapp-bridge.service
 CONV_SERVICE = wpp-conversation.service
 
-.PHONY: install bridge service indicator status logs restart uninstall conv-install conv-start conv-stop conv-logs test lint
+.PHONY: bridge-on bridge-off conv-on conv-off conv-status conv-contact install bridge service indicator status logs restart uninstall conv-install conv-start conv-stop conv-logs test lint
 
 # Fluxo completo guiado (build, auth, MCP, systemd, indicador)
 install:
@@ -61,3 +61,24 @@ test:
 
 lint:
 	@cd whatsapp-mcp-server && uv run --group dev ruff check .
+
+# Controles do dia a dia
+bridge-on:
+	@systemctl --user start $(SERVICE) && echo "Bridge ligado."
+
+bridge-off:
+	@systemctl --user stop $(SERVICE) && echo "Bridge desligado."
+
+conv-on:
+	@cd whatsapp-mcp-server && uv run python conversation.py on
+
+conv-off:
+	@cd whatsapp-mcp-server && uv run python conversation.py off
+
+conv-status:
+	@cd whatsapp-mcp-server && uv run python conversation.py status
+
+# Escolhe em qual contato o modo atua. Ex.: make conv-contact NAME="Ana" MODE=draft   (MODE: off | draft | auto)
+conv-contact:
+	@test -n "$(NAME)" -a -n "$(MODE)" || { echo 'Uso: make conv-contact NAME="Nome ou telefone" MODE=off|draft|auto'; exit 2; }
+	@cd whatsapp-mcp-server && uv run python conversation.py contact "$(NAME)" "$(MODE)"
