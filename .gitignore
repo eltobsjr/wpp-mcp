@@ -18,3 +18,6 @@ whatsapp-bridge/store/*.lock
 
 # Estado do modo conversacional
 whatsapp-bridge/store/conversation_mode.json
+
+# Sessão ao vivo
+whatsapp-bridge/store/live_session.json

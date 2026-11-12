@@ -102,6 +102,7 @@ def set_contact_profile(
     language: Optional[str] = None,
     signature: Optional[str] = None,
     avoid: Optional[str] = None,
+    context: Optional[str] = None,
     reply_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Define COMO escrever para um contato salvo (o teor das mensagens). Só os campos
@@ -114,12 +115,13 @@ def set_contact_profile(
         language: Idioma das mensagens, ex.: "pt-BR", "en"
         signature: Assinatura ou fecho opcional
         avoid: O que não fazer, ex.: "emoji, gírias, falar de preço"
+        context: Assunto/objetivo da conversa em andamento, ex.: "combinar o churrasco de sábado"
         reply_mode: Resposta automática no modo conversacional: "off" (padrão), "draft" (só rascunho) ou "auto"
     """
     try:
         profile = saved_contacts.set_profile(
             contact, tone=tone, address_as=address_as, language=language,
-            signature=signature, avoid=avoid, reply_mode=reply_mode)
+            signature=signature, avoid=avoid, context=context, reply_mode=reply_mode)
     except (saved_contacts.RecipientError, ValueError) as e:
         return {"success": False, "message": str(e),
                 "candidates": getattr(e, "candidates", [])}

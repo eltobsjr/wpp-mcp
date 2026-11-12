@@ -301,4 +301,5 @@ MIT — veja [LICENSE](./LICENSE). Baseado no trabalho original de [Luke Harries
 - **Busca rápida**: índice FTS5 em arquivo separado (`search_index.db`), criado em segundo plano na primeira busca.
 - **Segurança**: nome ambíguo ou inexistente não envia nada (devolve candidatos); `send_file` só envia de `~` (fora de pastas ocultas) e `/tmp`; ajustável por `WHATSAPP_ALLOWED_SEND_DIRS`.
 - **Modo conversacional**: ver [docs/MODO-CONVERSACIONAL.md](docs/MODO-CONVERSACIONAL.md).
+- **Sessão ao vivo**: conversa conduzida no chat do OpenBot, com painel, aprovação por mensagem ou modo automático e assunto definido pelo dono: [docs/SESSAO-AO-VIVO.md](docs/SESSAO-AO-VIVO.md).
 - `make test` e `make lint` rodam testes e linter do servidor MCP.

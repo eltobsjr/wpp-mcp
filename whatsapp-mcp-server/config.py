@@ -16,6 +16,7 @@ WHATSAPP_DB_PATH = os.path.join(STORE_DIR, "whatsapp.db")
 MESSAGE_LOG_PATH = os.path.join(STORE_DIR, "mensagens_log.txt")
 SEARCH_INDEX_PATH = os.environ.get("WHATSAPP_SEARCH_INDEX") or os.path.join(STORE_DIR, "search_index.db")
 CONVERSATION_STATE_PATH = os.environ.get("WHATSAPP_CONVERSATION_STATE") or os.path.join(STORE_DIR, "conversation_mode.json")
+LIVE_SESSION_PATH = os.environ.get("WHATSAPP_LIVE_SESSION") or os.path.join(STORE_DIR, "live_session.json")
 AUTOMATION_DIR = os.environ.get("OPENBOT_AUTOMATION_DIR") or os.path.join(
     os.path.expanduser("~"), ".config", "OpenBot", "automation")
 CONTACTS_PATH = os.environ.get("WHATSAPP_CONTACTS_FILE") or os.path.join(STORE_DIR, "contacts.json")

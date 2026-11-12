@@ -112,7 +112,7 @@ def remove_contact(identifier: str) -> int:
     return len(contacts) - len(kept)
 
 
-PROFILE_TEXT_FIELDS = ("tone", "address_as", "language", "signature", "avoid")
+PROFILE_TEXT_FIELDS = ("tone", "address_as", "language", "signature", "avoid", "context")
 REPLY_MODES = ("off", "draft", "auto")
 
 
@@ -152,7 +152,8 @@ def get_profile(identifier: str) -> Optional[Dict[str, object]]:
 def set_profile(identifier: str, **fields: Optional[str]) -> Dict[str, object]:
     """Atualiza só os campos informados. `None` mantém o valor; string vazia apaga o campo.
 
-    Campos: tone, address_as, language, signature, avoid (textos livres) e reply_mode
+    Campos: tone, address_as, language, signature, avoid, context (textos livres; context é o
+    assunto/objetivo da conversa em andamento) e reply_mode
     (off | draft | auto). Levanta `RecipientError` se o contato não existir ou for ambíguo
     e `ValueError` para campo desconhecido ou reply_mode inválido.
     """
