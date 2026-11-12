@@ -1,0 +1,13 @@
+[Unit]
+Description=WhatsApp MCP - vigia do modo conversacional
+After=whatsapp-bridge.service
+
+[Service]
+Type=simple
+WorkingDirectory=__SERVER_DIR__
+ExecStart=/usr/bin/uv --directory __SERVER_DIR__ run python conversation.py watch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

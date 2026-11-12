@@ -292,3 +292,13 @@ Para problemas de integração com o Claude Desktop, veja a [documentação ofic
 ## Licença
 
 MIT — veja [LICENSE](./LICENSE). Baseado no trabalho original de [Luke Harries](https://github.com/lharries/whatsapp-mcp).
+
+
+## Novidades (branch feat/melhorias-mcp)
+
+- **Tom por contato**: `set_contact_profile`, `get_contact_profile` e `prepare_message` (perfil + conversa recente, sem enviar).
+- **Leitura enxuta**: `list_messages` e `list_chats` em formato compacto (cronológico, 50–70% menos tokens nas medições); `read_new_messages` lê só o que chegou desde um cursor.
+- **Busca rápida**: índice FTS5 em arquivo separado (`search_index.db`), criado em segundo plano na primeira busca.
+- **Segurança**: nome ambíguo ou inexistente não envia nada (devolve candidatos); `send_file` só envia de `~` (fora de pastas ocultas) e `/tmp`; ajustável por `WHATSAPP_ALLOWED_SEND_DIRS`.
+- **Modo conversacional**: ver [docs/MODO-CONVERSACIONAL.md](docs/MODO-CONVERSACIONAL.md).
+- `make test` e `make lint` rodam testes e linter do servidor MCP.

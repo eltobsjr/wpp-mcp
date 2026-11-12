@@ -14,12 +14,12 @@ import sqlite3
 import time
 from typing import Dict, List, Optional, Set
 
+import config
 import contacts as saved_contacts
 from textutil import fold, phone_keys  # noqa: F401 (reexportados)
 
-_STORE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "whatsapp-bridge", "store")
-MESSAGES_DB_PATH = os.path.join(_STORE, "messages.db")
-WHATSAPP_DB_PATH = os.path.join(_STORE, "whatsapp.db")
+MESSAGES_DB_PATH = config.MESSAGES_DB_PATH
+WHATSAPP_DB_PATH = config.WHATSAPP_DB_PATH
 _TTL_S = 30
 
 _cache: Dict[str, object] = {"t": 0.0}

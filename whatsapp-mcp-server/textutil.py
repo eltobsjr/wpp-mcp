@@ -3,13 +3,19 @@ import re
 import unicodedata
 from typing import Set
 
+# Marcas de acento combinantes (U+0300–U+036F) que o NFKD separa das letras. Regex compilada
+# roda em C; o filtro caractere a caractere em Python era o gargalo das buscas.
+_COMBINING = re.compile("[\u0300-\u036f]")
+
 
 def fold(text) -> str:
     """Minúsculas e sem acento: 'João' e 'JOAO' viram 'joao'."""
     if not text:
         return ""
-    decomposed = unicodedata.normalize("NFKD", str(text))
-    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
+    text = str(text)
+    if text.isascii():  # caminho rápido: ASCII não tem acento para remover
+        return text.casefold()
+    return _COMBINING.sub("", unicodedata.normalize("NFKD", text)).casefold()
 
 
 def phone_keys(phone: str) -> Set[str]:

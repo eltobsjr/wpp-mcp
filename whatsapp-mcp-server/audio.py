@@ -2,6 +2,7 @@ import os
 import subprocess
 import tempfile
 
+
 def convert_to_opus_ogg(input_file, output_file=None, bitrate="32k", sample_rate=24000):
     """
     Convert an audio file to Opus format in an Ogg container.
@@ -49,16 +50,10 @@ def convert_to_opus_ogg(input_file, output_file=None, bitrate="32k", sample_rate
     
     try:
         # Run the ffmpeg command and capture output
-        process = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True
-        )
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
         return output_file
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Failed to convert audio. You likely need to install ffmpeg {e.stderr}")
+        raise RuntimeError(f"Failed to convert audio. You likely need to install ffmpeg {e.stderr}") from e
 
 
 def convert_to_opus_ogg_temp(input_file, bitrate="32k", sample_rate=24000):

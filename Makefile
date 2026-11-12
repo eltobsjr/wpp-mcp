@@ -1,6 +1,7 @@
 SERVICE = whatsapp-bridge.service
+CONV_SERVICE = wpp-conversation.service
 
-.PHONY: install bridge service indicator status logs restart uninstall
+.PHONY: install bridge service indicator status logs restart uninstall conv-install conv-start conv-stop conv-logs test lint
 
 # Fluxo completo guiado (build, auth, MCP, systemd, indicador)
 install:
@@ -36,3 +37,27 @@ uninstall:
 	@systemctl --user daemon-reload
 	@gnome-extensions uninstall whatsapp-bridge@eltobsjr.gmail.com 2>/dev/null || true
 	@echo "Serviço e indicador removidos. A sessão do WhatsApp e o histórico continuam em whatsapp-bridge/store/."
+
+# Modo conversacional: vigia que acorda a rotina do OpenBot (ver conversation.py).
+# O modo em si liga/desliga pela ferramenta MCP `conversation_mode`; o serviço só precisa estar de pé.
+conv-install:
+	@mkdir -p "$(HOME)/.config/systemd/user"
+	@sed "s#__SERVER_DIR__#$(CURDIR)/whatsapp-mcp-server#g" systemd/wpp-conversation.service > "$(HOME)/.config/systemd/user/$(CONV_SERVICE)"
+	@systemctl --user daemon-reload
+	@echo "Instalado. Inicie com: make conv-start"
+
+conv-start:
+	@systemctl --user enable --now $(CONV_SERVICE)
+
+conv-stop:
+	@systemctl --user disable --now $(CONV_SERVICE)
+
+conv-logs:
+	@journalctl --user -u $(CONV_SERVICE) -n 100 -f
+
+# Testes e lint do servidor MCP
+test:
+	@cd whatsapp-mcp-server && uv run --group dev pytest -q
+
+lint:
+	@cd whatsapp-mcp-server && uv run --group dev ruff check .

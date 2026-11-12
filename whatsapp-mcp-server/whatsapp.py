@@ -3,14 +3,17 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime
 from dataclasses import dataclass
-from typing import Optional, List, Tuple, Iterable
-import os.path
+from datetime import datetime
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
+from urllib.parse import quote
+
 import requests
-import json
+
 import audio
+import config
 import identity
+import searchindex
 from textutil import fold
 
 # MCP fala JSON-RPC via stdio: qualquer print() em stdout corromperia o
@@ -18,11 +21,10 @@ from textutil import fold
 logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
 logger = logging.getLogger("whatsapp-mcp")
 
-MESSAGES_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db')
-MESSAGE_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'mensagens_log.txt')
-WHATSAPP_BRIDGE_PORT = os.environ.get("WHATSAPP_BRIDGE_PORT", "9090")
-WHATSAPP_API_BASE_URL = f"http://localhost:{WHATSAPP_BRIDGE_PORT}/api"
-REQUEST_TIMEOUT_S = 10
+MESSAGES_DB_PATH = config.MESSAGES_DB_PATH
+MESSAGE_LOG_PATH = config.MESSAGE_LOG_PATH
+WHATSAPP_API_BASE_URL = config.BRIDGE_API_BASE_URL
+REQUEST_TIMEOUT_S = config.REQUEST_TIMEOUT_S
 
 @dataclass
 class Message:
@@ -63,8 +65,10 @@ class MessageContext:
 
 
 def _connect() -> sqlite3.Connection:
-    """Conexão de leitura com `fold()` registrada (busca sem acento nem maiúscula)."""
-    conn = sqlite3.connect(MESSAGES_DB_PATH, timeout=5)
+    """Conexão SOMENTE LEITURA com `fold()` registrada (busca sem acento nem maiúscula).
+    Só o bridge escreve em messages.db."""
+    uri = f"file:{quote(os.path.abspath(MESSAGES_DB_PATH))}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=5)
     conn.create_function("fold", 1, fold, deterministic=True)
     return conn
 
@@ -77,8 +81,8 @@ def _ts_param(value: str, name: str) -> str:
     """ISO-8601 -> 'YYYY-MM-DD HH:MM:SS' no fuso local, o formato gravado pelo bridge."""
     try:
         dt = datetime.fromisoformat(value)
-    except ValueError:
-        raise ValueError(f"Invalid date format for '{name}': {value}. Please use ISO-8601 format.")
+    except ValueError as e:
+        raise ValueError(f"Invalid date format for '{name}': {value}. Please use ISO-8601 format.") from e
     if dt.tzinfo is not None:
         dt = dt.astimezone()
     return dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -168,6 +172,54 @@ def format_messages_list(messages: List[Message], show_chat_info: bool = True) -
         output += format_message(message, show_chat_info)
     return output
 
+def _clock(ts: datetime, prev: Optional[datetime]) -> str:
+    return f"{ts:%H:%M}" if prev is not None and prev.date() == ts.date() else f"{ts:%Y-%m-%d %H:%M}"
+
+
+def format_compact(messages: List[Message]) -> str:
+    """Formato enxuto para gastar menos tokens: um cabeçalho por conversa e uma linha por
+    mensagem (`HH:MM Nome: texto`). Mídia aparece como `[tipo id=ID]`; o JID do cabeçalho
+    junto com o id serve para `download_media`."""
+    if not messages:
+        return "No messages to display."
+    lines: List[str] = []
+    current_jid: Optional[str] = None
+    prev: Optional[datetime] = None
+    for m in messages:
+        if m.chat_jid != current_jid:
+            current_jid, prev = m.chat_jid, None
+            name = identity.display_name(m.chat_jid, m.chat_name) or m.chat_jid
+            lines.append(f"# {name} | {m.chat_jid}")
+        is_group = (m.chat_jid or "").endswith("@g.us")
+        if m.is_from_me:
+            who = "Eu"
+        elif is_group:
+            who = get_sender_name(m.sender)
+        else:
+            who = "Contato"
+        media = f"[{m.media_type} id={m.id}] " if m.media_type else ""
+        text = (m.content or "").replace("\n", "\n  ")
+        lines.append(f"{_clock(m.timestamp, prev)} {who}: {media}{text}".rstrip())
+        prev = m.timestamp
+    return "\n".join(lines)
+
+
+def format_chats_compact(chats: List[Chat]) -> str:
+    """Uma linha por conversa: `nome | jid | data hora | quem: última mensagem (80 chars)`."""
+    if not chats:
+        return "No chats to display."
+    lines = []
+    for c in chats:
+        when = f"{c.last_message_time:%Y-%m-%d %H:%M}" if c.last_message_time else "-"
+        last = ""
+        if c.last_message:
+            who = "Eu" if c.last_is_from_me else (get_sender_name(c.last_sender) if c.is_group and c.last_sender else "Contato")
+            snippet = c.last_message.replace("\n", " ")
+            last = f" | {who}: {snippet[:80]}{'…' if len(snippet) > 80 else ''}"
+        lines.append(f"{c.name or c.jid} | {c.jid} | {when}{last}")
+    return "\n".join(lines)
+
+
 def list_messages(
     after: Optional[str] = None,
     before: Optional[str] = None,
@@ -176,16 +228,21 @@ def list_messages(
     query: Optional[str] = None,
     limit: int = 20,
     page: int = 0,
-    include_context: bool = True,
+    include_context: Optional[bool] = None,
     context_before: int = 1,
-    context_after: int = 1
-) -> List[Message]:
-    """Get messages matching the specified criteria with optional context.
+    context_after: int = 1,
+    compact: bool = True,
+) -> str:
+    """Get messages matching the specified criteria.
 
     `chat_jid` e `sender_phone_number` aceitam telefone, JID ou LID e cobrem as duas
     formas do mesmo contato. `query` ignora acento/maiúscula, exige todas as palavras
-    (em qualquer ordem) e procura também no nome dos arquivos de mídia.
+    (em qualquer ordem) e procura também no nome dos arquivos de mídia; usa o índice de
+    busca quando ele está pronto. `include_context=None` liga o contexto só quando há `query`.
+    Em `compact` (padrão) a saída é cronológica e enxuta.
     """
+    if include_context is None:
+        include_context = bool(query)
     conn = None
     try:
         conn = _connect()
@@ -214,7 +271,13 @@ def list_messages(
             where_clauses.append(f"messages.chat_jid IN ({marks})")
             params.extend(vals)
 
-        for word in fold(query).split() if query else []:
+        words = fold(query).split() if query else []
+        indexable = [w for w in words if len(w) >= searchindex.MIN_TERM_LEN]
+        if indexable and searchindex.attach_if_ready(conn, MESSAGES_DB_PATH):
+            # Pré-filtro indexado; o LIKE abaixo continua valendo e confere cada candidato.
+            where_clauses.append("messages.rowid IN (SELECT rowid FROM idx.msgfts WHERE msgfts MATCH ?)")
+            params.append(searchindex.match_expression(indexable))
+        for word in words:
             pattern = f"%{_like_escape(word)}%"
             where_clauses.append("(fold(messages.content) LIKE ? ESCAPE '\\' OR fold(messages.filename) LIKE ? ESCAPE '\\')")
             params.extend([pattern, pattern])
@@ -240,14 +303,70 @@ def list_messages(
                     if (m.chat_jid, m.id) not in seen:
                         seen.add((m.chat_jid, m.id))
                         messages_with_context.append(m)
+            result = messages_with_context
 
-            return format_messages_list(messages_with_context, show_chat_info=True)
-
+        if compact:
+            # A página vem do mais novo para o mais antigo; para ler, ordem cronológica
+            # (agrupada por conversa quando a busca atravessa vários chats).
+            result.sort(key=(lambda m: m.timestamp) if chat_jid else (lambda m: (m.chat_jid, m.timestamp)))
+            return format_compact(result)
         return format_messages_list(result, show_chat_info=True)
 
     except sqlite3.Error as e:
         logger.error(f"Database error: {e}")
-        return []
+        return f"Database error: {e}"
+    finally:
+        if conn:
+            conn.close()
+
+
+def read_new_messages(
+    cursor: Optional[int] = None,
+    chat_jid: Optional[str] = None,
+    include_from_me: bool = False,
+    limit: int = 50,
+    compact: bool = True,
+) -> Dict[str, Any]:
+    """Mensagens que chegaram depois de `cursor` (um número devolvido antes em `next_cursor`).
+
+    `cursor=None` só devolve o ponto atual (`next_cursor`) sem mensagens: serve para começar
+    a acompanhar dali em diante sem ler o histórico. `cursor=0` lê desde o começo.
+    Por padrão ignora as mensagens enviadas por mim.
+    """
+    conn = None
+    try:
+        conn = _connect()
+        top = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM messages").fetchone()[0]
+        if cursor is None:
+            return {"messages": "", "count": 0, "next_cursor": top, "has_more": False, "chat_jids": []}
+        sql = ["SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me,"
+               " chats.jid, messages.id, messages.media_type, messages.rowid FROM messages"
+               " JOIN chats ON messages.chat_jid = chats.jid WHERE messages.rowid > ?"]
+        params: List[Any] = [cursor]
+        if not include_from_me:
+            sql.append("AND messages.is_from_me = 0")
+        if chat_jid:
+            marks, vals = _in_clause(identity.equivalent_jids(chat_jid) | {chat_jid})
+            sql.append(f"AND messages.chat_jid IN ({marks})")
+            params.extend(vals)
+        sql.append("ORDER BY messages.rowid LIMIT ?")
+        params.append(limit)
+        rows = conn.execute(" ".join(sql), tuple(params)).fetchall()
+        messages = [_message_from_row(r[:8]) for r in rows]
+        has_more = len(rows) == limit
+        next_cursor = rows[-1][8] if has_more else top
+        if compact:
+            messages.sort(key=lambda m: (m.chat_jid, m.timestamp))
+        return {
+            "messages": format_compact(messages) if compact else format_messages_list(messages),
+            "count": len(messages),
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+            "chat_jids": sorted({m.chat_jid for m in messages}),
+        }
+    except sqlite3.Error as e:
+        logger.error(f"Database error: {e}")
+        return {"messages": f"Database error: {e}", "count": 0, "next_cursor": cursor, "has_more": False, "chat_jids": []}
     finally:
         if conn:
             conn.close()
@@ -525,149 +644,88 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
         if conn:
             conn.close()
 
-def send_message(recipient: str, message: str) -> Tuple[bool, str]:
+def _post_bridge(path: str, payload: dict) -> Tuple[bool, dict]:
+    """POST no bridge. Devolve (ok_http, corpo_json). Em falha, o corpo traz {"message": ...}."""
     try:
-        # Validate input
-        if not recipient:
-            return False, "Recipient must be provided"
-        
-        url = f"{WHATSAPP_API_BASE_URL}/send"
-        payload = {
-            "recipient": recipient,
-            "message": message,
-        }
-        
-        response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT_S)
-        
-        # Check if the request was successful
-        if response.status_code == 200:
-            result = response.json()
-            return result.get("success", False), result.get("message", "Unknown response")
-        else:
-            return False, f"Error: HTTP {response.status_code} - {response.text}"
-            
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/{path}", json=payload, timeout=REQUEST_TIMEOUT_S)
     except requests.RequestException as e:
-        return False, f"Request error: {str(e)}"
-    except json.JSONDecodeError:
-        return False, f"Error parsing response: {response.text}"
-    except Exception as e:
-        return False, f"Unexpected error: {str(e)}"
+        return False, {"message": f"Request error: {e}"}
+    if response.status_code != 200:
+        return False, {"message": f"Error: HTTP {response.status_code} - {response.text}"}
+    try:
+        return True, response.json()
+    except ValueError:
+        return False, {"message": f"Error parsing response: {response.text}"}
+
+
+def _send(payload: dict) -> Tuple[bool, str]:
+    ok, body = _post_bridge("send", payload)
+    if not ok:
+        return False, body["message"]
+    return body.get("success", False), body.get("message", "Unknown response")
+
+
+def send_message(recipient: str, message: str) -> Tuple[bool, str]:
+    if not recipient:
+        return False, "Recipient must be provided"
+    return _send({"recipient": recipient, "message": message})
+
 
 def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
-    try:
-        # Validate input
-        if not recipient:
-            return False, "Recipient must be provided"
-        
-        if not media_path:
-            return False, "Media path must be provided"
-        
-        if not os.path.isfile(media_path):
-            return False, f"Media file not found: {media_path}"
-        
-        url = f"{WHATSAPP_API_BASE_URL}/send"
-        payload = {
-            "recipient": recipient,
-            "media_path": media_path
-        }
-        
-        response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT_S)
-        
-        # Check if the request was successful
-        if response.status_code == 200:
-            result = response.json()
-            return result.get("success", False), result.get("message", "Unknown response")
-        else:
-            return False, f"Error: HTTP {response.status_code} - {response.text}"
-            
-    except requests.RequestException as e:
-        return False, f"Request error: {str(e)}"
-    except json.JSONDecodeError:
-        return False, f"Error parsing response: {response.text}"
-    except Exception as e:
-        return False, f"Unexpected error: {str(e)}"
+    if not recipient:
+        return False, "Recipient must be provided"
+    if not media_path:
+        return False, "Media path must be provided"
+    if not os.path.isfile(media_path):
+        return False, f"Media file not found: {media_path}"
+    return _send({"recipient": recipient, "media_path": media_path})
+
 
 def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
-    try:
-        # Validate input
-        if not recipient:
-            return False, "Recipient must be provided"
-        
-        if not media_path:
-            return False, "Media path must be provided"
-        
-        if not os.path.isfile(media_path):
-            return False, f"Media file not found: {media_path}"
+    if not recipient:
+        return False, "Recipient must be provided"
+    if not media_path:
+        return False, "Media path must be provided"
+    if not os.path.isfile(media_path):
+        return False, f"Media file not found: {media_path}"
+    if not media_path.endswith(".ogg"):
+        try:
+            media_path = audio.convert_to_opus_ogg_temp(media_path)
+        except Exception as e:
+            return False, f"Error converting file to opus ogg. You likely need to install ffmpeg: {e}"
+    return _send({"recipient": recipient, "media_path": media_path})
 
-        if not media_path.endswith(".ogg"):
-            try:
-                media_path = audio.convert_to_opus_ogg_temp(media_path)
-            except Exception as e:
-                return False, f"Error converting file to opus ogg. You likely need to install ffmpeg: {str(e)}"
-        
-        url = f"{WHATSAPP_API_BASE_URL}/send"
-        payload = {
-            "recipient": recipient,
-            "media_path": media_path
-        }
-        
-        response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT_S)
-        
-        # Check if the request was successful
-        if response.status_code == 200:
-            result = response.json()
-            return result.get("success", False), result.get("message", "Unknown response")
-        else:
-            return False, f"Error: HTTP {response.status_code} - {response.text}"
-            
-    except requests.RequestException as e:
-        return False, f"Request error: {str(e)}"
-    except json.JSONDecodeError:
-        return False, f"Error parsing response: {response.text}"
-    except Exception as e:
-        return False, f"Unexpected error: {str(e)}"
 
 def download_media(message_id: str, chat_jid: str) -> Optional[str]:
-    """Download media from a message and return the local file path.
-    
-    Args:
-        message_id: The ID of the message containing the media
-        chat_jid: The JID of the chat containing the message
-    
-    Returns:
-        The local file path if download was successful, None otherwise
-    """
-    try:
-        url = f"{WHATSAPP_API_BASE_URL}/download"
-        payload = {
-            "message_id": message_id,
-            "chat_jid": chat_jid
-        }
-        
-        response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT_S)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("success", False):
-                path = result.get("path")
-                logger.info(f"Media downloaded successfully: {path}")
-                return path
-            else:
-                logger.error(f"Download failed: {result.get('message', 'Unknown error')}")
-                return None
-        else:
-            logger.error(f"Error: HTTP {response.status_code} - {response.text}")
-            return None
-            
-    except requests.RequestException as e:
-        logger.error(f"Request error: {str(e)}")
-        return None
-    except json.JSONDecodeError:
-        logger.error(f"Error parsing response: {response.text}")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        return None
+    """Download media from a message and return the local file path, or None on failure."""
+    ok, body = _post_bridge("download", {"message_id": message_id, "chat_jid": chat_jid})
+    if ok and body.get("success", False):
+        path = body.get("path")
+        logger.info(f"Media downloaded successfully: {path}")
+        return path
+    logger.error(f"Download failed: {body.get('message', 'Unknown error')}")
+    return None
+
+
+def _reverse_blocks(path: str, chunk: int = 1 << 20) -> Iterator[List[str]]:
+    """Blocos de linhas COMPLETAS do arquivo, do fim para o começo; em cada bloco, da
+    última linha para a primeira."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos = f.tell()
+        rest = b""
+        while pos > 0:
+            step = min(chunk, pos)
+            pos -= step
+            f.seek(pos)
+            parts = (f.read(step) + rest).split(b"\n")
+            rest = parts[0]  # pode estar cortada ao meio: completa no próximo bloco
+            block = [raw.decode("utf-8", "replace") for raw in reversed(parts[1:]) if raw]
+            if block:
+                yield block
+        if rest:
+            yield [rest.decode("utf-8", "replace")]
+
 
 def read_message_log(query: Optional[str] = None, limit: int = 100) -> List[str]:
     """Read raw lines from the bridge's plain-text message log.
@@ -676,19 +734,25 @@ def read_message_log(query: Optional[str] = None, limit: int = 100) -> List[str]
     before it can be revoked/deleted, so it's the durable record for messages that
     were later deleted for everyone.
 
+    Lê do fim para o começo e para assim que junta `limit` linhas. Cada bloco de 1 MB é
+    pré-filtrado de uma vez (se não tem todas as palavras, é pulado sem olhar linha a linha).
+
     Args:
         query: If provided, only lines containing all these words (any order, ignoring case and accents) are returned
         limit: Maximum number of matching lines to return, most recent first
     """
-    if not os.path.exists(MESSAGE_LOG_PATH):
+    if not os.path.exists(MESSAGE_LOG_PATH) or limit <= 0:
         return []
-
     words = fold(query).split() if query else []
     matches: List[str] = []
-    with open(MESSAGE_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            line = line.rstrip("\n")
+    for block in _reverse_blocks(MESSAGE_LOG_PATH):
+        if words:
+            folded_block = fold("\n".join(block))
+            if not all(w in folded_block for w in words):
+                continue
+        for line in block:
             if not words or all(w in fold(line) for w in words):
                 matches.append(line)
-
-    return matches[-limit:][::-1]
+                if len(matches) >= limit:
+                    return matches
+    return matches

@@ -12,3 +12,9 @@ WppMcpSecondBrain/
 # Agenda local de contatos (dados pessoais)
 whatsapp-bridge/store/contacts.json
 
+
+# Trava de arquivo da agenda
+whatsapp-bridge/store/*.lock
+
+# Estado do modo conversacional
+whatsapp-bridge/store/conversation_mode.json

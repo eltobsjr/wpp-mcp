@@ -5,18 +5,40 @@ busca nos chats do WhatsApp, que às vezes falha. Formato:
     {"contacts": [{"name": "Maria", "phone": "5511999998888", "notes": ""}]}
 O arquivo pode ser editado à mão.
 """
+import contextlib
+import fcntl
 import json
-import quopri
 import os
+import quopri
 import re
 import tempfile
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional
 
+import config
 from textutil import fold, phone_keys
 
-CONTACTS_PATH = os.environ.get("WHATSAPP_CONTACTS_FILE") or os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "whatsapp-bridge", "store", "contacts.json"
-)
+CONTACTS_PATH = config.CONTACTS_PATH
+
+
+class RecipientError(ValueError):
+    """O destinatário não pôde ser resolvido com segurança (ausente ou ambíguo)."""
+
+    def __init__(self, message: str, candidates: Optional[List[Dict[str, str]]] = None):
+        super().__init__(message)
+        self.candidates = candidates or []
+
+
+@contextlib.contextmanager
+def _locked() -> Iterator[None]:
+    """Exclusão mútua entre processos: vários servidores MCP escrevem no mesmo arquivo,
+    e ler-alterar-gravar sem trava perde edições."""
+    path = os.path.abspath(CONTACTS_PATH) + ".lock"
+    with open(path, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def normalize_phone(raw: str, default_country: str = "55") -> str:
@@ -64,39 +86,131 @@ def save_contact(name: str, phone: str, notes: str = "") -> Dict[str, str]:
     name, phone = name.strip(), normalize_phone(phone)
     if not name or not phone:
         raise ValueError("name e phone são obrigatórios")
-    contacts = _load()
-    for c in contacts:
-        if c["phone"] == phone:
-            c["name"] = name
-            if notes:
-                c["notes"] = notes
-            break
-    else:
-        c = {"name": name, "phone": phone, "notes": notes}
-        contacts.append(c)
-    _save(contacts)
+    with _locked():
+        contacts = _load()
+        for c in contacts:
+            if c["phone"] == phone:
+                c["name"] = name
+                if notes:
+                    c["notes"] = notes
+                break
+        else:
+            c = {"name": name, "phone": phone, "notes": notes}
+            contacts.append(c)
+        _save(contacts)
     return c
 
 
 def remove_contact(identifier: str) -> int:
     """Remove por telefone ou por nome exato. Retorna quantos removeu."""
     phone = normalize_phone(identifier)
-    contacts = _load()
-    kept = [c for c in contacts
-            if c["phone"] != phone and c["name"].lower() != identifier.strip().lower()]
-    _save(kept)
+    with _locked():
+        contacts = _load()
+        kept = [c for c in contacts
+                if c["phone"] != phone and c["name"].lower() != identifier.strip().lower()]
+        _save(kept)
     return len(contacts) - len(kept)
 
 
+PROFILE_TEXT_FIELDS = ("tone", "address_as", "language", "signature", "avoid")
+REPLY_MODES = ("off", "draft", "auto")
+
+
+def _find_in(contacts: List[Dict[str, object]], identifier: str) -> Optional[Dict[str, object]]:
+    ident = (identifier or "").strip()
+    if not ident:
+        return None
+    key = fold(ident)
+    exact = [c for c in contacts if fold(c["name"]) == key]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise RecipientError(f"Mais de um contato chamado '{ident}'. Use o telefone.", exact[:5])
+    digits = re.sub(r"\D", "", ident)
+    if len(digits) >= 8:
+        keys = phone_keys(digits) | phone_keys(normalize_phone(digits))
+        for c in contacts:
+            if phone_keys(c["phone"]) & keys:
+                return c
+    return None
+
+
+def find_contact(identifier: str) -> Optional[Dict[str, object]]:
+    """Contato salvo por nome exato (sem acento/caixa) ou por telefone (com/sem 9º dígito).
+    None se não houver; `RecipientError` se o nome for ambíguo."""
+    return _find_in(_load(), identifier)
+
+
+def get_profile(identifier: str) -> Optional[Dict[str, object]]:
+    """Perfil de comunicação do contato ({} se ainda não tem) ou None se o contato não existe."""
+    contact = find_contact(identifier)
+    if contact is None:
+        return None
+    return dict(contact.get("profile") or {})
+
+
+def set_profile(identifier: str, **fields: Optional[str]) -> Dict[str, object]:
+    """Atualiza só os campos informados. `None` mantém o valor; string vazia apaga o campo.
+
+    Campos: tone, address_as, language, signature, avoid (textos livres) e reply_mode
+    (off | draft | auto). Levanta `RecipientError` se o contato não existir ou for ambíguo
+    e `ValueError` para campo desconhecido ou reply_mode inválido.
+    """
+    unknown = set(fields) - set(PROFILE_TEXT_FIELDS) - {"reply_mode"}
+    if unknown:
+        raise ValueError(f"Campo(s) de perfil desconhecido(s): {', '.join(sorted(unknown))}")
+    mode = fields.get("reply_mode")
+    if mode is not None and mode != "" and mode not in REPLY_MODES:
+        raise ValueError(f"reply_mode deve ser um de: {', '.join(REPLY_MODES)}")
+    with _locked():
+        contacts = _load()
+        target = _find_in(contacts, identifier)
+        if target is None:
+            raise RecipientError(f"Contato '{identifier}' não encontrado na agenda. Salve-o antes com save_contact.")
+        profile = dict(target.get("profile") or {})
+        for name, value in fields.items():
+            if value is None:
+                continue
+            value = value.strip()
+            if value:
+                profile[name] = value
+            else:
+                profile.pop(name, None)
+        if profile:
+            target["profile"] = profile
+        else:
+            target.pop("profile", None)
+        _save(contacts)
+        return dict(profile)
+
+
+_PHONE_RE = re.compile(r"\+?[\d\s\-()]{8,}")
+
+
 def resolve(recipient: str) -> str:
-    """Se `recipient` for o nome de um contato salvo (único), devolve o telefone.
-    Caso contrário devolve o valor original."""
-    if "@" in recipient or re.fullmatch(r"\+?[\d\s\-()]{8,}", recipient):
+    """Transforma o destinatário em algo que o bridge aceita: JID (com '@'), telefone
+    (só dígitos) ou o telefone de um contato salvo.
+
+    Levanta `RecipientError` se o nome não existir ou for ambíguo, com candidatos para o
+    chamador mostrar. Antes o nome cru seguia para o bridge, que o tratava como número.
+    """
+    recipient = (recipient or "").strip()
+    if not recipient:
+        raise RecipientError("Recipient must be provided")
+    if "@" in recipient:
         return recipient
-    exact = [c for c in _load() if c["name"].lower() == recipient.strip().lower()]
+    if _PHONE_RE.fullmatch(recipient):
+        return re.sub(r"\D", "", recipient)
+    key = fold(recipient)
+    exact = [c for c in _load() if fold(c["name"]) == key]
     if len(exact) == 1:
         return exact[0]["phone"]
-    return recipient
+    if len(exact) > 1:
+        raise RecipientError(
+            f"Mais de um contato chamado '{recipient}'. Use o telefone.", exact[:5])
+    similar = list_contacts(recipient)[:5]
+    hint = " Candidatos: " + ", ".join(f"{c['name']} ({c['phone']})" for c in similar) if similar else ""
+    raise RecipientError(f"Contato '{recipient}' não encontrado na agenda.{hint}", similar)
 
 
 def parse_vcf(text: str) -> List[Dict[str, str]]:
@@ -129,18 +243,16 @@ def parse_vcf(text: str) -> List[Dict[str, str]]:
 def import_vcf(path: str) -> Dict[str, int]:
     with open(path, encoding="utf-8", errors="replace") as f:
         found = parse_vcf(f.read())
-    contacts = _load()
-    by_phone = {c["phone"]: c for c in contacts}
     added = 0
-    for item in found:
-        cur = by_phone.get(item["phone"])
-        if cur is None:
-            c = {"name": item["name"], "phone": item["phone"], "notes": ""}
-            contacts.append(c)
-            by_phone[c["phone"]] = c
-            added += 1
-        elif cur["name"] != item["name"]:
-            # não sobrescreve edições manuais: só conta como já existente
-            pass
-    _save(contacts)
+    with _locked():
+        contacts = _load()
+        by_phone = {c["phone"]: c for c in contacts}
+        for item in found:
+            # Já existente (mesmo com nome diferente) não é sobrescrito: preserva edições manuais.
+            if item["phone"] not in by_phone:
+                c = {"name": item["name"], "phone": item["phone"], "notes": ""}
+                contacts.append(c)
+                by_phone[c["phone"]] = c
+                added += 1
+        _save(contacts)
     return {"found": len(found), "added": added, "already_present": len(found) - added}
