@@ -39,6 +39,7 @@ import requests
 
 import config
 import contacts
+import groups
 import identity
 import whatsapp
 
@@ -135,7 +136,11 @@ class Trigger:
 
 
 def eligibility(chat_jid: str) -> Optional[Dict[str, str]]:
-    """{'name', 'mode'} se a conversa pode ser respondida; None caso contrário."""
+    """{'name', 'mode'} se a conversa pode ser respondida; None caso contrário.
+    Grupo só entra se estiver em `draft` (nunca auto): o agente rascunha, o dono envia."""
+    if chat_jid.endswith("@g.us"):
+        g = groups.get_group(chat_jid)
+        return {"name": g["name"], "mode": "draft"} if g and g.get("reply_mode") == "draft" else None
     if chat_jid.endswith(_NON_PERSONAL_SUFFIXES) or chat_jid.startswith("status@"):
         return None
     phone = identity.phone_of(chat_jid)
@@ -228,12 +233,15 @@ class Watcher:
         incoming: Dict[str, Any] = {}
         mine_max: Dict[str, int] = {}
         for jid, from_me, count, lo, hi in rows:
+            if jid.endswith("@g.us"):
+                continue  # grupos entram abaixo, só pelas menções
             if jid.endswith(_NON_PERSONAL_SUFFIXES) or jid.startswith("status@"):
                 continue
             if from_me:
                 mine_max[jid] = hi
             else:
                 incoming[jid] = (count, lo, hi)
+        self._group_mentions(incoming)
         for jid, hi_mine in mine_max.items():
             # Eu respondi depois da última mensagem recebida: nada a fazer.
             if jid in self.pending and hi_mine > self.pending[jid]["last_rowid"]:
@@ -246,6 +254,27 @@ class Watcher:
             p["last_rowid"] = hi
             p["last_seen"] = now
         self.read_cursor = top
+
+    def _group_mentions(self, incoming: Dict[str, Any]) -> None:
+        """Grupos em draft: só contam as mensagens novas que mencionam o dono ou trazem a palavra-chave."""
+        watched = [g for g in groups.list_groups() if g.get("reply_mode") == "draft"]
+        if not watched:
+            return
+        owner = groups.owner_digits()
+        conn = whatsapp._connect()
+        try:
+            for g in watched:
+                pats = groups.mention_patterns(g, owner)
+                if not pats:
+                    continue
+                cond = " OR ".join("lower(content) LIKE ?" for _ in pats)
+                row = conn.execute(
+                    f"SELECT COUNT(*), MIN(rowid), MAX(rowid) FROM messages WHERE chat_jid = ? AND is_from_me = 0 "
+                    f"AND rowid > ? AND ({cond})", (g["jid"], self.read_cursor, *[f"%{p}%" for p in pats])).fetchone()
+                if row and row[0]:
+                    incoming[g["jid"]] = (row[0], row[1], row[2])
+        finally:
+            conn.close()
 
     def _fire_due(self, now: float, state: Dict[str, Any]) -> int:
         fired = 0

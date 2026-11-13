@@ -215,7 +215,9 @@ Toda saída é JSON (erros também, com saída 1). Resumo:
 |---|---|
 | Ler | `chats`, `msgs`, `new` (só o que chegou), `thread`, `find`, `chat`, `last`, `context`, `log`, `media`, `profile` |
 | Enviar | `send`, `send-file`, `audio`, `reply` (com `--check`) |
-| Agenda | `agenda [--full]`, `save`, `forget --yes`, `import-vcf`, `dedupe [--apply]`, `contact` |
+| Agenda | `agenda [--full]`, `save [--also]`, `forget --yes`, `import-vcf`, `dedupe [--apply]`, `contact` |
+| Mensagens existentes | `ids`, `react`, `edit`, `revoke --yes`, `read`, `send --reply-to` |
+| Grupos no vigia | `group`, `groups` |
 | Modo conversacional | `auto status|on|off|config`, `contact --mode off|draft|auto --context ...` |
 | Saúde | `status`, `doctor`, `--version` |
 
@@ -281,6 +283,8 @@ MIT — veja [LICENSE](./LICENSE). Baseado no trabalho original de [Luke Harries
 
 
 ## Novidades
+
+**2026-11-13 (noite)** — citar, reagir, editar, apagar e marcar como lido; grupos no vigia (só rascunho); arquivo no modo auto com permissão e pasta fixa; mídia de canal e mídia própria baixam; contatos com vários números; grupos achados por nome. Veja [docs/FUNCIONALIDADES.md](docs/FUNCIONALIDADES.md).
 
 **2026-11-13 — padronização em `wpp` + skill**
 - Todas as ferramentas do MCP viraram comandos do `wpp` (com testes de paridade); o MCP foi arquivado em `_arquivo/mcp/` e desligado no OpenBot e no Claude Code. Motivo: o MCP carregava ~22 definições de ferramenta em todo turno; o `wpp` + skill só custa quando é usado.

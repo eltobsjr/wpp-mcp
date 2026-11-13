@@ -24,3 +24,4 @@ CONTACTS_PATH = os.environ.get("WHATSAPP_CONTACTS_FILE") or os.path.join(STORE_D
 BRIDGE_PORT = os.environ.get("WHATSAPP_BRIDGE_PORT", "9090")
 BRIDGE_API_BASE_URL = f"http://localhost:{BRIDGE_PORT}/api"
 REQUEST_TIMEOUT_S = 10
+GROUPS_PATH = os.environ.get("WHATSAPP_GROUPS_FILE") or os.path.join(STORE_DIR, "groups.json")

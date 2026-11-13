@@ -81,3 +81,10 @@ O agente que executa o modo conversacional (WhatsApp Conversacional) precisa de 
 
 ## Grupos
 Grupos não são cadastrados: `wpp find "<nome>"` e `wpp chats "<nome>"` os acham entre os chats do bridge, e `wpp send "<nome do grupo>" "texto"` resolve pelo nome (ambíguo → pede o JID). O vigia e o `wpp reply` nunca respondem em grupo.
+
+## Ações sobre mensagens, grupos e arquivos (2026-11-13)
+- `wpp ids <chat>` mostra os ids; com eles: `wpp send ... --reply-to <id>`, `wpp react`, `wpp edit`, `wpp revoke --yes`, `wpp read`. O bridge ganhou os endpoints `/api/react`, `/api/edit`, `/api/revoke` e `/api/read` (`whatsapp-bridge/actions.go`) e guarda no histórico o que envia.
+- Grupos no vigia: `wpp group "<nome>" --mode draft [--keyword ...]`. Só rascunho, e só quando mencionam o dono ou usam a palavra-chave. Config em `store/groups.json` (fora do git).
+- Arquivo no modo auto: `wpp contact <nome> --allow-files on --yes` e `wpp reply <chat> "legenda" --file ~/OpenBot/Shared/Envio/x.pdf`.
+- Mídia de canais (sem criptografia) e mídia enviada pelo `wpp` agora baixam com `wpp media`.
+- Lista completa: [FUNCIONALIDADES.md](FUNCIONALIDADES.md).

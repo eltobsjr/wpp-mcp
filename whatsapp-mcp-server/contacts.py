@@ -125,7 +125,7 @@ def remove_contact(identifier: str) -> int:
     return len(contacts) - len(kept)
 
 
-PROFILE_TEXT_FIELDS = ("tone", "address_as", "language", "signature", "avoid", "context")
+PROFILE_TEXT_FIELDS = ("tone", "address_as", "language", "signature", "avoid", "context", "allow_files")  # allow_files: on|off
 REPLY_MODES = ("off", "draft", "auto")
 
 

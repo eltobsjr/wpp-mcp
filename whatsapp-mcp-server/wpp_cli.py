@@ -13,11 +13,14 @@ import time
 import config
 import contacts as saved_contacts
 import conversation
+import groups
 import identity
 import jsonstate
 import safety
+import whatsapp
 from whatsapp import (
     download_media,
+    edit_message,
     format_chats_compact,
     get_chat,
     get_direct_chat_by_contact,
@@ -25,8 +28,11 @@ from whatsapp import (
     get_message_context,
     list_chats,
     list_messages,
+    mark_read,
+    react_message,
     read_message_log,
     read_new_messages,
+    revoke_message,
     search_contacts,
     send_audio_message,
     send_file,
@@ -64,6 +70,9 @@ def sent_for(chat: str, limit: int = 8):
 # ---- resposta automática com trava em CÓDIGO (não depende do modelo obedecer ao texto da skill) ----
 AUTO_MAX_PER_HOUR = 8  # respostas automáticas por conversa por hora
 AUTO_MAX_CHARS = 400
+AUTO_FILE_MAX_BYTES = 5 * 1024 * 1024
+AUTO_FILE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".pdf", ".txt", ".ogg"}
+AUTO_FILE_DIR = os.path.expanduser("~/OpenBot/Shared/Envio")  # única pasta de onde o modo auto envia arquivo
 _URL = re.compile(r"(https?://|www\.|\b[\w-]+\.(com|net|org|br|io|me|ly)\b)", re.IGNORECASE)
 _LONG_DIGITS = re.compile(r"\d{9,}")
 _AUTO_STATE = os.environ.get("WHATSAPP_AUTO_REPLIES") or os.path.join(config.STORE_DIR, "auto_replies.json")
@@ -129,6 +138,48 @@ def auto_reply(chat: str, text: str, sender=None, now=None):
     return {"success": bool(sent), "message": msg}
 
 
+def check_auto_file(chat: str, path: str, caption: str = "", now=None):
+    """(ok, motivos) para enviar ARQUIVO sozinho: tudo de check_auto_reply, mais allow_files=on no contato,
+    arquivo dentro de ~/OpenBot/Shared/Envio, extensão da lista segura e até 5 MB."""
+    ok, why = check_auto_reply(chat, caption or "arquivo", now)
+    why = list(why)
+    phone = identity.phone_of(chat) if "@" in chat else chat
+    try:
+        contact = saved_contacts.find_contact(phone) or saved_contacts.find_contact(chat)
+    except saved_contacts.RecipientError:
+        contact = None
+    if not contact or (contact.get("profile") or {}).get("allow_files") != "on":
+        why.append("contato sem permissão para arquivos (wpp contact <nome> --allow-files on --yes)")
+    real = os.path.realpath(os.path.expanduser(path or ""))
+    base = os.path.realpath(AUTO_FILE_DIR)
+    if not (real == base or real.startswith(base + os.sep)):
+        why.append(f"arquivo fora de {AUTO_FILE_DIR}")
+    elif not os.path.isfile(real):
+        why.append("arquivo não existe")
+    else:
+        if os.path.splitext(real)[1].lower() not in AUTO_FILE_EXTS:
+            why.append("tipo de arquivo não permitido (só imagem, pdf, txt, ogg)")
+        if os.path.getsize(real) > AUTO_FILE_MAX_BYTES:
+            why.append("arquivo maior que 5 MB")
+    return (not why, [w for w in why if w != "texto vazio"])
+
+
+def auto_reply_file(chat: str, path: str, caption: str = "", sender=None, now=None):
+    sender = sender or send_file
+    ok, why = check_auto_file(chat, path, caption, now)
+    if not ok:
+        return {"success": False, "blocked": why, "hint": "não enviado: relate ao dono como rascunho"}
+    sent, msg = sender(chat, os.path.realpath(os.path.expanduser(path)))
+    if sent:
+        log_sent(chat, f"[arquivo] {os.path.basename(path)}", "auto", now)
+        with jsonstate.locked(_AUTO_STATE):
+            st = jsonstate.read(_AUTO_STATE, {"sent": []})
+            keep = [m for m in st["sent"] if m["t"] >= (now or time.time()) - 3600]
+            keep.append({"t": now or time.time(), "chat": chat})
+        jsonstate.update(_AUTO_STATE, {"sent": []}, sent=keep)
+    return {"success": bool(sent), "message": msg}
+
+
 def _resolve(r):
     try:
         return saved_contacts.resolve(r)
@@ -170,6 +221,8 @@ def timeline(chat: str, limit: int = 12, db_path=None):
         who = "EU (celular)" if from_me else "Contato"
         items.append((t, who, content or f"[{media or 'mídia'}]"))
     for m in sent_for(chat, limit):
+        # o bridge também guarda o que enviou: a linha do registro (com "manual"/"auto") vale mais
+        items = [i for i in items if not (i[1] == "EU (celular)" and i[2] == m["text"] and abs(i[0] - m["t"]) < 120)]
         items.append((m["t"], f"EU ({m['how']})", m["text"]))
     items.sort(key=lambda x: x[0])
     return items[-limit:]
@@ -284,7 +337,8 @@ def set_auto(on):
 
 
 def edit_contact(
-    name, mode=None, context=None, tone=None, avoid=None, address_as=None, yes=False, language=None, signature=None
+    name, mode=None, context=None, tone=None, avoid=None, address_as=None, yes=False, language=None, signature=None,
+    allow_files=None,
 ):
     """Mostra ou altera o perfil de UM contato. 'auto' só com yes=True (confirmação explícita do dono)."""
     try:
@@ -301,8 +355,11 @@ def edit_contact(
         "address_as": address_as,
         "language": language,
         "signature": signature,
+        "allow_files": allow_files,
     }
     fields = {k: v for k, v in fields.items() if v is not None}
+    if fields.get("allow_files") == "on" and not yes:
+        return {"success": False, "message": "liberar arquivos no modo auto: repita com --yes para confirmar"}
     if fields.get("reply_mode") == "auto" and not yes:
         return {"success": False, "message": "modo auto envia mensagens de verdade: repita com --yes para confirmar"}
     if fields:
@@ -430,6 +487,51 @@ def find(query, limit=10):
     ]
 
 
+def configure_group(grupo, mode=None, context=None, keywords=None):
+    """Liga/desliga o acompanhamento de um grupo (só off/draft) e guarda assunto e palavras-chave."""
+    if grupo.endswith("@g.us"):
+        jid, name = grupo, (chat_info(grupo) or {}).get("name") or grupo
+    else:
+        found = saved_contacts.group_chats(grupo)
+        exact = [g for g in found if saved_contacts.fold(g["name"]) == saved_contacts.fold(grupo)]
+        pick = exact if len(exact) == 1 else found
+        if len(pick) != 1:
+            return {"success": False, "message": "grupo não encontrado ou ambíguo: use o JID (wpp chats \"<nome>\")",
+                    "candidates": [{"name": g["name"], "jid": g["phone"]} for g in found[:8]]}
+        jid, name = pick[0]["phone"], pick[0]["name"]
+    try:
+        g = groups.set_group(jid, name, mode, context, keywords)
+    except ValueError as e:
+        return {"success": False, "message": str(e)}
+    return {"success": True, "group": g, "gatilho": groups.mention_patterns(g)}
+
+
+def recent_ids(chat, limit=8, db_path=None):
+    """[(id, instante, quem, texto)] das últimas mensagens da conversa, para citar/reagir/editar/apagar."""
+    import sqlite3
+
+    path = db_path or config.MESSAGES_DB_PATH
+    jids = identity.equivalent_jids(chat) | {chat} if "@" not in chat else {chat}
+    conn = None
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
+        q = ",".join("?" * len(jids))
+        rows = conn.execute(
+            f"SELECT id, timestamp, is_from_me, sender, content, media_type FROM messages "
+            f"WHERE chat_jid IN ({q}) ORDER BY timestamp DESC LIMIT ?", (*jids, limit)).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        if conn is not None:
+            conn.close()
+    out = []
+    for mid, ts, mine, sender, content, media in reversed(rows):
+        who = "eu" if mine else (identity.lookup_name(sender) or sender)
+        text = (content or "").replace("\n", " ")[:70] or (f"[{media}]" if media else "")
+        out.append((mid, str(ts)[:16], who, text))
+    return out
+
+
 def chat_info(chat):
     """Dados de uma conversa por JID (@g.us, @lid, @s.whatsapp.net) ou telefone."""
     if not chat.isdigit() and "@" not in chat:  # nome de contato ou de grupo
@@ -543,6 +645,31 @@ def build_parser():
     th = cmd("thread", "conversa com OS DOIS LADOS (recebidas + enviadas pela API), em ordem, com segundos")
     th.add_argument("chat")
     th.add_argument("-n", type=int, default=10)
+    gp = cmd("group", "configura um GRUPO no vigia: off ou draft (rascunho; grupo nunca é respondido sozinho)")
+    gp.add_argument("grupo", help="nome do grupo ou JID @g.us")
+    gp.add_argument("--mode", choices=["off", "draft"])
+    gp.add_argument("--context")
+    gp.add_argument("--keyword", action="append", help="palavra que também aciona (além da menção ao dono); repita para várias")
+    cmd("groups", "lista os grupos configurados no vigia")
+    ids = cmd("ids", "ids das últimas mensagens de uma conversa (para citar, reagir, editar, apagar)")
+    ids.add_argument("chat")
+    ids.add_argument("-n", type=int, default=8)
+    rc = cmd("react", "reage a uma mensagem com um emoji (--remove tira a reação)")
+    rc.add_argument("chat")
+    rc.add_argument("message_id")
+    rc.add_argument("emoji", nargs="?", default="")
+    rc.add_argument("--remove", action="store_true")
+    ed = cmd("edit", "edita uma mensagem SUA (o WhatsApp só deixa por ~15 minutos)")
+    ed.add_argument("chat")
+    ed.add_argument("message_id")
+    ed.add_argument("text")
+    rv = cmd("revoke", "apaga para todos uma mensagem SUA")
+    rv.add_argument("chat")
+    rv.add_argument("message_id")
+    rv.add_argument("--yes", action="store_true", help="confirma (apagar não tem volta)")
+    rd = cmd("read", "marca como lidas as últimas mensagens recebidas (a outra pessoa vê o 'lido')")
+    rd.add_argument("chat")
+    rd.add_argument("message_ids", nargs="*")
     f = cmd("find", "acha contato por nome ou telefone")
     f.add_argument("query")
     f.add_argument("-n", type=int, default=10)
@@ -566,6 +693,7 @@ def build_parser():
     e = cmd("send", "ENVIA texto (só com OK do dono)")
     e.add_argument("to")
     e.add_argument("text")
+    e.add_argument("--reply-to", metavar="ID", help="cita a mensagem com esse id (veja `wpp ids`)")
     sf = cmd("send-file", "ENVIA arquivo (só com OK do dono)")
     sf.add_argument("to")
     sf.add_argument("path")
@@ -575,6 +703,7 @@ def build_parser():
     r = cmd("reply", "resposta AUTOMÁTICA, com travas em código (modo ligado, 1:1, contato em auto)")
     r.add_argument("chat_jid")
     r.add_argument("text")
+    r.add_argument("--file", metavar="CAMINHO", help="envia este arquivo (o texto vira legenda); exige allow_files=on no contato")
     r.add_argument("--check", action="store_true", help="só mostra se passaria nas travas; não envia")
 
     ag = cmd("agenda", "lista os contatos salvos", "contacts")
@@ -601,6 +730,7 @@ def build_parser():
     ct.add_argument("--address-as", dest="address_as")
     ct.add_argument("--language")
     ct.add_argument("--signature")
+    ct.add_argument("--allow-files", choices=["on", "off"], help="deixa o modo auto enviar arquivo (só de ~/OpenBot/Shared/Envio, até 5 MB)")
     ct.add_argument("--yes", action="store_true", help="confirma o modo auto (envia de verdade)")
 
     am = cmd("auto", "chave geral do modo conversacional")
@@ -668,10 +798,40 @@ def run(a):
         _out(profile_of(a.chat))
     elif c == "send":
         dest = _recipient(a.to)
-        ok, msg = send_message(dest, a.text)
+        ok, msg = send_message(dest, a.text, a.reply_to)
         if ok:
             log_sent(dest, a.text, "manual")
-        _out({"success": ok, "message": msg})
+        res = {"success": ok, "message": msg}
+        if ok and whatsapp.last_sent_id:
+            res["id"] = whatsapp.last_sent_id
+        _out(res)
+        return 0 if ok else 1
+    elif c == "groups":
+        _out(groups.list_groups())
+    elif c == "group":
+        res = configure_group(a.grupo, a.mode, a.context, a.keyword)
+        _out(res)
+        return 0 if res["success"] else 1
+    elif c == "ids":
+        rows = recent_ids(_recipient(a.chat), a.n)
+        for mid, when, who, text in rows:
+            print(f"{mid} | {when} | {who}: {text}")
+        if not rows:
+            print("(sem mensagens)")
+    elif c in ("react", "edit", "revoke", "read"):
+        chat = _recipient(a.chat)
+        if c == "react":
+            ok, msg, mid = react_message(chat, a.message_id, "" if a.remove else a.emoji)
+        elif c == "edit":
+            ok, msg, mid = edit_message(chat, a.message_id, a.text)
+        elif c == "revoke":
+            if not a.yes:
+                _out({"success": False, "message": "apagar não tem volta: repita com --yes para confirmar"})
+                return 1
+            ok, msg, mid = revoke_message(chat, a.message_id)
+        else:
+            ok, msg, mid = mark_read(chat, a.message_ids)
+        _out({"success": ok, "message": msg, **({"id": mid} if mid else {})})
         return 0 if ok else 1
     elif c in ("send-file", "audio"):
         res = send_path(_recipient(a.to), a.path, audio=(c == "audio"))
@@ -679,8 +839,10 @@ def run(a):
         return 0 if res["success"] else 1
     elif c == "reply":
         if a.check:
-            ok, why = check_auto_reply(a.chat_jid, a.text)
+            ok, why = check_auto_file(a.chat_jid, a.file, a.text) if a.file else check_auto_reply(a.chat_jid, a.text)
             res = {"success": ok, "would_send": ok, "blocked": why}
+        elif a.file:
+            res = auto_reply_file(a.chat_jid, a.file, a.text)
         else:
             res = auto_reply(a.chat_jid, a.text)
         _out(res)
@@ -709,7 +871,7 @@ def run(a):
     elif c == "import-vcf":
         _out(saved_contacts.import_vcf(a.path))
     elif c == "contact":
-        res = edit_contact(a.name, a.mode, a.context, a.tone, a.avoid, a.address_as, a.yes, a.language, a.signature)
+        res = edit_contact(a.name, a.mode, a.context, a.tone, a.avoid, a.address_as, a.yes, a.language, a.signature, a.allow_files)
         _out(res)
         return 0 if res["success"] else 1
     elif c == "auto":

@@ -662,13 +662,45 @@ def _send(payload: dict) -> Tuple[bool, str]:
     ok, body = _post_bridge("send", payload)
     if not ok:
         return False, body["message"]
+    global last_sent_id
+    last_sent_id = body.get("id") or None
     return body.get("success", False), body.get("message", "Unknown response")
 
 
-def send_message(recipient: str, message: str) -> Tuple[bool, str]:
+last_sent_id: Optional[str] = None  # id da última mensagem enviada por _send (para editar/apagar/reagir depois)
+
+
+def send_message(recipient: str, message: str, reply_to: Optional[str] = None) -> Tuple[bool, str]:
     if not recipient:
         return False, "Recipient must be provided"
-    return _send({"recipient": recipient, "message": message})
+    payload = {"recipient": recipient, "message": message}
+    if reply_to:
+        payload["reply_to"] = reply_to
+    return _send(payload)
+
+
+def _action(path: str, payload: dict) -> Tuple[bool, str, Optional[str]]:
+    """Ações sobre mensagens existentes (react, edit, revoke, read). Devolve (ok, mensagem, id)."""
+    ok, body = _post_bridge(path, payload)
+    if not ok:
+        return False, body["message"], None
+    return bool(body.get("success", False)), body.get("message", "Unknown response"), body.get("id")
+
+
+def react_message(chat: str, message_id: str, emoji: str) -> Tuple[bool, str, Optional[str]]:
+    return _action("react", {"chat": chat, "message_id": message_id, "emoji": emoji})
+
+
+def edit_message(chat: str, message_id: str, text: str) -> Tuple[bool, str, Optional[str]]:
+    return _action("edit", {"chat": chat, "message_id": message_id, "text": text})
+
+
+def revoke_message(chat: str, message_id: str) -> Tuple[bool, str, Optional[str]]:
+    return _action("revoke", {"chat": chat, "message_id": message_id})
+
+
+def mark_read(chat: str, message_ids: Optional[List[str]] = None) -> Tuple[bool, str, Optional[str]]:
+    return _action("read", {"chat": chat, "message_ids": message_ids or []})
 
 
 def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:

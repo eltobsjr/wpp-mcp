@@ -27,7 +27,19 @@ Tudo roda no seu computador. O agente usa o comando `wpp` (guiado pela skill `wh
 | `wpp send <para> "texto"` | Envia texto. `<para>` pode ser nome salvo, nome de grupo, telefone ou JID. Nome ambíguo ou inexistente não envia nada e mostra as opções. |
 | `wpp send-file <para> <arquivo>` | Envia imagem, vídeo ou documento. Só de `~` (fora de pastas ocultas) e `/tmp`. |
 | `wpp audio <para> <arquivo>` | Envia como mensagem de voz (converte para `.ogg` se tiver ffmpeg). |
-| `wpp reply <chat> "texto"` | Resposta automática do modo conversacional. Só envia se o contato está em `auto`, é conversa 1:1, o modo está ligado e o texto tem até 400 caracteres. `--check` só simula e diz o que bloquearia. |
+| `wpp send <para> "texto" --reply-to <id>` | Envia **citando** uma mensagem (o id vem de `wpp ids`). |
+| `wpp reply <chat> "texto"` | Resposta automática do modo conversacional. Só envia se o contato está em `auto`, é conversa 1:1, o modo está ligado e o texto tem até 400 caracteres. `--check` só simula e diz o que bloquearia. Com `--file <caminho>` envia um arquivo (o texto vira legenda), mas só se o contato tiver `allow_files=on` e o arquivo estiver em `~/OpenBot/Shared/Envio` (imagem, pdf, txt, ogg, até 5 MB). |
+
+## Agir sobre mensagens que já existem
+| Comando | O que faz |
+|---|---|
+| `wpp ids <chat> [-n N]` | Lista os ids das últimas mensagens da conversa (para os comandos abaixo). |
+| `wpp react <chat> <id> <emoji>` | Reage a uma mensagem. `--remove` tira a reação. |
+| `wpp edit <chat> <id> "novo texto"` | Edita uma mensagem **sua**. O WhatsApp só deixa por cerca de 15 minutos. |
+| `wpp revoke <chat> <id> --yes` | Apaga para todos uma mensagem **sua**. Não tem volta, por isso exige `--yes`. |
+| `wpp read <chat> [ids...]` | Marca como lidas as últimas recebidas (a outra pessoa vê o "lido"). |
+
+Todas contam como envio: o agente só faz com o seu ok. As mensagens que o `wpp` envia agora ficam no histórico, então dá para citar, reagir, editar e apagar o que você mesmo mandou. |
 
 ## Agenda (começa vazia e é montada aos poucos)
 | Comando | O que faz |
@@ -47,7 +59,11 @@ Quem pede: pessoa que não está registrada → o agente pergunta o número (ou 
 | `wpp contact <nome> --context ... --tone ... --avoid ... --address-as ... --language ... --signature ...` | Assunto da conversa e jeito de falar com aquela pessoa. |
 | `wpp auto on\|off\|status\|config` | Chave geral do vigia, debounce e limite de acionamentos por hora. |
 
-O vigia (`wpp-conversation.service`) observa mensagens novas e aciona o agente só para conversas 1:1 de contatos em `draft` ou `auto`. Grupos, canais e status nunca. Quem controla modo, perfil e chave geral é só você.
+| `wpp contact <nome> --allow-files on --yes` | Deixa o modo auto enviar arquivo àquele contato (pasta fixa, tipos seguros, até 5 MB). |
+| `wpp group <grupo> --mode off\|draft [--context ...] [--keyword palavra]` | Põe um **grupo** no vigia **só em rascunho**: o agente é acionado quando alguém menciona você (`@seu-número`) ou usa a palavra-chave, avisa você e propõe um texto. Grupo nunca é respondido sozinho. |
+| `wpp groups` | Lista os grupos acompanhados. |
+
+O vigia (`wpp-conversation.service`) observa mensagens novas e aciona o agente só para conversas 1:1 de contatos em `draft` ou `auto`. Grupos só em rascunho (`wpp group`); canais e status nunca. Quem controla modo, perfil e chave geral é só você.
 
 ## Saúde
 | Comando | O que faz |
@@ -67,7 +83,8 @@ O vigia (`wpp-conversation.service`) observa mensagens novas e aciona o agente s
 Liga/desliga o bridge, mostra o estado, a chave do modo conversacional e os contatos atendidos, e deixa trocar `off/rascunho/auto` e escrever o assunto. Detalhes em [gnome-indicator/README.md](../gnome-indicator/README.md).
 
 ## Lacunas conhecidas (o que ele não faz)
-- **Resolvidas em 2026-11-13:** grupo não era achado por nome (`find`, `send`, `chat`); contato só podia ter um número; apagar contato não deixava cópia.
-- **Não faz, de propósito:** responder sozinho em grupo; enviar arquivo no modo conversacional; editar, apagar, reagir ou citar mensagens; marcar como lido; ligações; status/stories.
-- **Limites do WhatsApp:** mídia de canais (newsletters) e mídia que você mesmo enviou podem não baixar (falta informação de download).
+- **Resolvidas em 2026-11-13:** grupo não era achado por nome; contato só podia ter um número; apagar contato não deixava cópia; não dava para citar, reagir, editar, apagar nem marcar como lido; mídia de canal e mídia enviada por você não baixavam; grupo não tinha como entrar no vigia; o modo auto não enviava arquivo.
+- **Não faz, de propósito:** responder **sozinho** em grupo (só rascunho); enviar arquivo no modo auto fora da pasta `Envio`/sem permissão do contato; status/stories (público para seus contatos e fora do foco).
+- **Não dá:** ligações de voz ou vídeo (a biblioteca do WhatsApp usada não suporta).
+- **Limites do WhatsApp:** mídia de canal só baixa se o bridge recebeu o link dela (algumas chegaram sem); editar só vale por ~15 minutos; citar só funciona para mensagens que estão no histórico do bridge.
 - **Depende de você:** o agente do modo conversacional precisa de Permissões = Acesso completo no OpenBot, e o OpenBot precisa estar aberto.

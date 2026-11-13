@@ -447,3 +447,87 @@ def test_forget_deixa_copia_bak(tmp_path, monkeypatch):
     saved.save_contact("Caio", "5511999990004")
     saved.remove_contact("Ana")
     assert "Ana" in (tmp_path / "c.json.bak").read_text(encoding="utf-8")
+
+
+def test_timeline_nao_duplica_mensagem_enviada_pela_api(tmp_path, monkeypatch):
+    import sqlite3
+    import time as _t
+    from datetime import datetime
+
+    db = tmp_path / "m.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIMESTAMP, is_from_me BOOLEAN, media_type TEXT)")
+    agora = _t.time()
+    c.execute("INSERT INTO messages VALUES ('A','5511@s.whatsapp.net','eu','oi',?,1,'')", (datetime.fromtimestamp(agora).isoformat(),))
+    c.commit()
+    c.close()
+    monkeypatch.setattr(wpp_cli, "sent_for", lambda chat, limit: [{"t": agora, "text": "oi", "how": "manual"}])
+    itens = wpp_cli.timeline("5511@s.whatsapp.net", 10, db_path=str(db))
+    assert [(w, x) for _, w, x in itens] == [("EU (manual)", "oi")]
+
+
+def test_grupo_so_aceita_off_ou_draft_e_vigia_so_conta_mencoes(tmp_path, monkeypatch):
+    import groups
+
+    monkeypatch.setattr(groups.config, "GROUPS_PATH", str(tmp_path / "g.json"))
+    g = groups.set_group("1@g.us", "Família", mode="draft", keywords=["maria"])
+    assert g["reply_mode"] == "draft"
+    import pytest
+
+    with pytest.raises(ValueError):
+        groups.set_group("1@g.us", "Família", mode="auto")
+    with pytest.raises(ValueError):
+        groups.set_group("5511@s.whatsapp.net", "x", mode="draft")
+    assert groups.mention_patterns(g, owner="5511999990000") == ["@5511999990000", "maria"]
+    assert conversation.eligibility("1@g.us") == {"name": "Família", "mode": "draft"}
+    assert conversation.eligibility("2@g.us") is None
+    groups.set_group("1@g.us", "Família", mode="off")
+    assert conversation.eligibility("1@g.us") is None
+
+
+def test_vigia_aciona_grupo_so_com_mencao(tmp_path, monkeypatch):
+    import sqlite3
+
+    import groups
+    import whatsapp
+
+    db = tmp_path / "m.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TEXT, is_from_me INTEGER)")
+    c.executemany("INSERT INTO messages VALUES (?,?,?,?,?,0)", [
+        ("a", "1@g.us", "x", "bom dia pessoal", "t"),
+        ("b", "1@g.us", "x", "oi @5511999990000 vem?", "t"),
+        ("c", "1@g.us", "x", "alguém viu a Maria?", "t"),
+    ])
+    c.commit()
+    c.close()
+    monkeypatch.setattr(whatsapp, "_connect", lambda: sqlite3.connect(db))
+    monkeypatch.setattr(groups.config, "GROUPS_PATH", str(tmp_path / "g.json"))
+    monkeypatch.setattr(groups, "owner_digits", lambda: "5511999990000")
+    groups.set_group("1@g.us", "Família", mode="draft", keywords=["maria"])
+    w = conversation.Watcher(notify=lambda t: True)
+    w.read_cursor = 0
+    incoming = {}
+    w._group_mentions(incoming)
+    assert incoming["1@g.us"][0] == 2  # a menção e a palavra-chave; "bom dia" não conta
+
+
+def test_arquivo_no_modo_auto_exige_permissao_pasta_tipo_e_tamanho(tmp_path, monkeypatch):
+    envio = tmp_path / "Envio"
+    envio.mkdir()
+    ok_file = envio / "a.pdf"
+    ok_file.write_bytes(b"x")
+    fora = tmp_path / "b.pdf"
+    fora.write_bytes(b"x")
+    exe = envio / "c.exe"
+    exe.write_bytes(b"x")
+    monkeypatch.setattr(wpp_cli, "AUTO_FILE_DIR", str(envio))
+    monkeypatch.setattr(wpp_cli, "check_auto_reply", lambda chat, text, now=None: (True, []))
+    contato = {"name": "Ana", "phone": "5511999990009", "profile": {"reply_mode": "auto", "allow_files": "on"}}
+    monkeypatch.setattr(wpp_cli.saved_contacts, "find_contact", lambda i: contato)
+    ok, why = wpp_cli.check_auto_file("5511999990009", str(ok_file), "oi")
+    assert ok and why == []
+    assert "fora de" in " ".join(wpp_cli.check_auto_file("5511999990009", str(fora))[1])
+    assert "tipo de arquivo" in " ".join(wpp_cli.check_auto_file("5511999990009", str(exe))[1])
+    contato["profile"]["allow_files"] = "off"
+    assert "sem permissão" in " ".join(wpp_cli.check_auto_file("5511999990009", str(ok_file))[1])
