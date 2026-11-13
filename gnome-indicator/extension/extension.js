@@ -1,7 +1,12 @@
+// WhatsApp Bridge — indicador da família Indicator (DESIGN.md). Opção A: painel com contatos expansíveis.
+// Dados pelo comando `wpp` (agenda, contact, auto, doctor). Sem polling com o menu fechado:
+// o estado do serviço vem do D-Bus do systemd e a agenda de um monitor de arquivos.
+import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
-import St from 'gi://St';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Pango from 'gi://Pango';
+import St from 'gi://St';
 
 import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
@@ -9,592 +14,567 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 
-const SERVICE = 'whatsapp-bridge.service';
-const BRIDGE_PORT = GLib.getenv('WHATSAPP_BRIDGE_PORT') || '9090';
-const STATUS_URL = `http://127.0.0.1:${BRIDGE_PORT}/api/status`;
-const HTTP_TIMEOUT_S = 2;
+import {Wpp} from './wpp.js';
+import {Bridge, openLogsTerminal} from './bridge.js';
+import {
+    MODES, MODE_LABEL, MODE_NAME, STATES, deriveState, parseDoctor, doctorChips, doctorSummary,
+    initial, formatPhone, servedContacts, visibleContacts, modeArgs, contextArgs, subtitle, validPhone,
+} from './logic.js';
 
-// Terminais tentados nessa ordem pra abrir os logs; o primeiro que existir no
-// PATH vence. Cada um tem uma sintaxe própria pra "rodar e ficar aberto".
-const TERMINAL_CANDIDATES = [
-    {bin: 'ptyxis', args: cmd => ['ptyxis', '--', ...cmd]},
-    {bin: 'gnome-terminal', args: cmd => ['gnome-terminal', '--', ...cmd]},
-    {bin: 'konsole', args: cmd => ['konsole', '-e', ...cmd]},
-    {bin: 'xterm', args: cmd => ['xterm', '-hold', '-e', ...cmd]},
-];
+const VISIBLE_LIMIT = 8;
 
-// Os labels ficam sem tradução aqui de propósito: este objeto é avaliado no
-// carregamento do módulo, antes de o Shell registrar a extensão — chamar
-// gettext() (_()) nesse ponto lança "gettext can only be called from
-// extensions". A tradução acontece no ponto de uso, em runtime (_rebuild).
-const STATE = {
-    on: {icon: 'network-transmit-receive-symbolic', cls: 'wab-icon-on', label: 'Conectado'},
-    off: {icon: 'network-offline-symbolic', cls: 'wab-icon-off', label: 'Desligado'},
-    starting: {icon: 'content-loading-symbolic', cls: 'wab-icon-pending', label: 'Iniciando…'},
-    disconnected: {icon: 'network-wired-disconnected-symbolic', cls: 'wab-icon-pending', label: 'Rodando, mas sem sessão do WhatsApp — pode precisar reescanear o QR code'},
-    pending: {icon: 'content-loading-symbolic', cls: 'wab-icon-pending', label: 'Aguarde…'},
-    error: {icon: 'dialog-warning-symbolic', cls: 'wab-icon-error', label: 'Não foi possível checar o serviço'},
-};
-
-
-// ---- Agenda de contatos (mesmo arquivo que o servidor MCP lê) ----
-const CONTACTS_RENDER_LIMIT = 60;
-
-function contactsFilePath() {
-    const fallback = GLib.build_filenamev([GLib.get_home_dir(), 'tools', 'wpp-mcp', 'whatsapp-bridge', 'store', 'contacts.json']);
-    try {
-        // Descobre o diretório do bridge pelo WorkingDirectory do serviço systemd.
-        const unit = GLib.build_filenamev([GLib.get_user_config_dir(), 'systemd', 'user', SERVICE]);
-        const [ok, bytes] = GLib.file_get_contents(unit);
-        if (ok) {
-            const m = new TextDecoder().decode(bytes).match(/^WorkingDirectory=(.+)$/m);
-            if (m)
-                return GLib.build_filenamev([m[1].trim(), 'store', 'contacts.json']);
-        }
-    } catch (e) {
-        // cai no caminho padrão
-    }
-    return fallback;
+function label(text, cls, props = {}) {
+    const l = new St.Label({text, style_class: cls, y_align: Clutter.ActorAlign.CENTER, ...props});
+    if (cls.includes('wab-ellipsis'))
+        l.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+    return l;
 }
 
-function loadContacts() {
-    try {
-        const [ok, bytes] = GLib.file_get_contents(contactsFilePath());
-        if (!ok)
-            return [];
-        return JSON.parse(new TextDecoder().decode(bytes)).contacts ?? [];
-    } catch (e) {
-        return [];
-    }
+function button(text, cls, onClick) {
+    const b = new St.Button({label: text, style_class: `wab-btn ${cls ?? ''}`.trim(), can_focus: true});
+    b.connect('clicked', onClick);
+    return b;
 }
 
-function saveContacts(contacts) {
-    contacts.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
-    const data = JSON.stringify({contacts}, null, 2);
-    const file = Gio.File.new_for_path(contactsFilePath());
-    file.replace_contents(new TextEncoder().encode(data), null, false,
-        Gio.FileCreateFlags.REPLACE_DESTINATION, null);
-}
-
-
-// ---- Modo conversacional (mesmo arquivo que o MCP e o vigia usam) ----
-function conversationFilePath() {
-    return GLib.build_filenamev([GLib.path_get_dirname(contactsFilePath()), 'conversation_mode.json']);
-}
-
-function loadConversation() {
-    try {
-        const [ok, bytes] = GLib.file_get_contents(conversationFilePath());
-        return ok ? JSON.parse(new TextDecoder().decode(bytes)) : {};
-    } catch (e) {
-        return {};
-    }
-}
-
-function saveConversation(state) {
-    const file = Gio.File.new_for_path(conversationFilePath());
-    file.replace_contents(new TextEncoder().encode(JSON.stringify(state, null, 2)), null, false,
-        Gio.FileCreateFlags.REPLACE_DESTINATION, null);
-}
-
-// Mesma regra do contacts.py: só dígitos; 10-11 dígitos sem DDI ganham 55.
-function normalizePhone(raw) {
-    let d = (raw ?? '').replace(/\D/g, '');
-    if (d.startsWith('00'))
-        d = d.slice(2);
-    if (d.length === 10 || d.length === 11)
-        d = `55${d}`;
-    return d;
-}
-
-function checkStatus(callback) {
-    try {
-        const proc = Gio.Subprocess.new(
-            ['systemctl', '--user', 'is-active', SERVICE],
-            Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
-        proc.communicate_utf8_async(null, null, (p, res) => {
-            try {
-                const [, stdout] = p.communicate_utf8_finish(res);
-                callback(stdout.trim());
-            } catch (e) {
-                callback('error');
-            }
-        });
-    } catch (e) {
-        callback('error');
-    }
-}
-
-// Consulta /api/status via curl: mais simples e previsível entre versões do
-// Shell do que lidar com libsoup. Se o curl não existir ou o bridge ainda não
-// tiver subido a API REST, trata como "sem resposta" (bridge ainda iniciando).
-function checkBridgeHealth(callback) {
-    try {
-        const proc = Gio.Subprocess.new(
-            ['curl', '-s', '-m', String(HTTP_TIMEOUT_S), '--fail', STATUS_URL],
-            Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
-        proc.communicate_utf8_async(null, null, (p, res) => {
-            try {
-                const [, stdout] = p.communicate_utf8_finish(res);
-                if (!proc.get_successful()) {
-                    callback(null);
-                    return;
-                }
-                callback(JSON.parse(stdout));
-            } catch (e) {
-                callback(null);
-            }
-        });
-    } catch (e) {
-        callback(null);
-    }
-}
-
-function runSystemctl(action, callback) {
-    try {
-        const proc = Gio.Subprocess.new(
-            ['systemctl', '--user', action, SERVICE],
-            Gio.SubprocessFlags.STDERR_PIPE);
-        proc.communicate_utf8_async(null, null, (p, res) => {
-            let ok = false;
-            let stderr = '';
-            try {
-                const [, , errOut] = p.communicate_utf8_finish(res);
-                stderr = errOut?.trim() ?? '';
-                ok = p.get_successful();
-            } catch (e) {
-                ok = false;
-            }
-            callback?.(ok, stderr);
-        });
-    } catch (e) {
-        logError(e, `whatsapp-bridge: falha ao rodar systemctl ${action}`);
-        callback?.(false, String(e));
-    }
-}
-
-function openLogsTerminal() {
-    const cmd = ['journalctl', '--user', '-u', SERVICE, '-n', '200', '-f'];
-    for (const candidate of TERMINAL_CANDIDATES) {
-        if (!GLib.find_program_in_path(candidate.bin))
-            continue;
-        try {
-            Gio.Subprocess.new(candidate.args(cmd), Gio.SubprocessFlags.NONE);
-            return true;
-        } catch (e) {
-            logError(e, `whatsapp-bridge: falha ao abrir logs com ${candidate.bin}`);
-        }
-    }
-    return false;
+function section(title) {
+    const box = new St.BoxLayout({vertical: true, style_class: 'wab-section'});
+    const head = new St.BoxLayout({style_class: 'wab-section-head'});
+    const t = label(title, 'wab-section-title', {x_expand: true});
+    head.add_child(t);
+    box.add_child(head);
+    return {box, head};
 }
 
 const Indicator = GObject.registerClass(
-class Indicator extends PanelMenu.Button {
+class WhatsAppBridgeIndicator extends PanelMenu.Button {
     _init(extension) {
         super._init(0.0, _('WhatsApp Bridge'), false);
-        this._extension = extension;
+        this._ext = extension;
         this._settings = extension.getSettings();
+        this._wpp = new Wpp(this._settings);
+        this._bridge = new Bridge();
+
         this._destroyed = false;
-        this._state = 'off';
         this._pending = false;
-        this._tab = 'status';
-        this._editingPhone = null;
+        this._service = 'unknown';
+        this._health = null;
+        this._conv = null;
+        this._doctor = [];
+        this._doctorMsg = '';
+        this._contacts = [];
+        this._query = '';
+        this._expanded = null;
+        this._confirm = null;
+        this._ctxDraft = '';
+        this._addOpen = false;
+        this._wppMissing = false;
+        this._pollId = 0;
+        this._burstId = 0;
+        this._burstLeft = 0;
         this._notifSource = null;
-        this._pollTimeoutId = null;
 
-        this._panelIcon = new St.Icon({style_class: 'system-status-icon'});
-        this.add_child(this._panelIcon);
+        const icon = new St.Icon({
+            gicon: Gio.FileIcon.new(Gio.File.new_for_path(`${extension.path}/icons/whatsapp-bridge-symbolic.svg`)),
+            style_class: 'system-status-icon wab-bar-icon',
+        });
+        this._bar = new St.Bin({style_class: 'wab-bar wab-st-off', child: icon, y_align: Clutter.ActorAlign.CENTER});
+        this.add_child(this._bar);
 
-        this._rebuild();
-        this._poll();
-        this._schedulePoll();
+        this._buildMenu();
+        this.menu.connect('open-state-changed', (_m, open) => this._onOpen(open));
+        this.connect('destroy', () => this._cleanup());
 
-        this._settings.connect('changed::poll-interval', () => this._schedulePoll());
+        this._bridge.watchUnit(() => this._onUnitChanged());
+        this._bridge.watchFiles(() => this._refreshData());
+        this._refreshService();
+    }
 
-        this.menu.connect('open-state-changed', (menu, open) => {
-            if (open) {
-                this._poll();
-                if (this._tab === 'contacts')
-                    this._rebuild(); // recarrega do disco
-            }
+    // ------------------------------------------------------------------ construção
+    _buildMenu() {
+        const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false, style_class: 'wab-item'});
+        this._root = new St.BoxLayout({vertical: true, x_expand: true, style_class: 'wab-root'});
+        item.add_child(this._root);
+        this.menu.addMenuItem(item);
+
+        // cabeçalho
+        const head = new St.BoxLayout({style_class: 'wab-head'});
+        this._avatar = new St.Bin({
+            style_class: 'wab-avatar wab-st-off', y_align: Clutter.ActorAlign.CENTER,
+            child: new St.Icon({
+                gicon: Gio.FileIcon.new(Gio.File.new_for_path(`${this._ext.path}/icons/whatsapp-bridge-symbolic.svg`)),
+                style_class: 'wab-avatar-icon',
+            }),
+        });
+        const titles = new St.BoxLayout({vertical: true, x_expand: true, style_class: 'wab-titles'});
+        titles.add_child(label(_('WhatsApp Bridge'), 'wab-title'));
+        this._sub = label('', 'wab-sub');
+        this._sub.clutter_text.set_line_wrap(true);
+        titles.add_child(this._sub);
+        this._pill = label('', 'wab-pill wab-pill-off');
+        head.add_child(this._avatar);
+        head.add_child(titles);
+        head.add_child(this._pill);
+        this._root.add_child(head);
+
+        // bridge
+        const sb = section(_('Bridge'));
+        const rowB = new St.BoxLayout({style_class: 'wab-row'});
+        this._dot = new St.Widget({style_class: 'wab-dot wab-dot-off', y_align: Clutter.ActorAlign.CENTER});
+        const textB = new St.BoxLayout({vertical: true, x_expand: true, style_class: 'wab-grow'});
+        this._bridgeText = label('', 'wab-text');
+        this._bridgeHint = label('', 'wab-hint');
+        textB.add_child(this._bridgeText);
+        textB.add_child(this._bridgeHint);
+        this._bridgeBtn = button(_('Ligar'), 'wab-btn-main', () => this._toggleBridge());
+        rowB.add_child(this._dot);
+        rowB.add_child(textB);
+        rowB.add_child(this._bridgeBtn);
+        sb.box.add_child(rowB);
+        this._root.add_child(sb.box);
+
+        // modo conversacional
+        const sc = section(_('Modo conversacional'));
+        const rowC = new St.BoxLayout({style_class: 'wab-row'});
+        const textC = new St.BoxLayout({vertical: true, x_expand: true, style_class: 'wab-grow'});
+        textC.add_child(label(_('Responder contatos'), 'wab-text'));
+        textC.add_child(label(_('chave geral'), 'wab-hint'));
+        this._switch = new PopupMenu.Switch(false);
+        this._switchBtn = new St.Button({
+            child: this._switch, can_focus: true, style_class: 'wab-switch-btn', accessible_name: _('Modo conversacional'),
+        });
+        this._switchBtn.connect('clicked', () => this._toggleConversation());
+        rowC.add_child(textC);
+        rowC.add_child(this._switchBtn);
+        sc.box.add_child(rowC);
+        const chips = new St.BoxLayout({style_class: 'wab-chips'});
+        this._chips = {};
+        for (const [key, text] of [['vigia', _('vigia')], ['openbot', _('OpenBot')], ['rotina', _('rotina')]]) {
+            const chip = new St.BoxLayout({style_class: 'wab-chip'});
+            const dot = new St.Widget({style_class: 'wab-dot wab-dot-off', y_align: Clutter.ActorAlign.CENTER});
+            chip.add_child(dot);
+            chip.add_child(label(text, 'wab-chip-text'));
+            chips.add_child(chip);
+            this._chips[key] = dot;
+        }
+        sc.box.add_child(chips);
+        this._doctorLabel = label('', 'wab-hint wab-doctor');
+        this._doctorLabel.clutter_text.set_line_wrap(true);
+        this._doctorLabel.visible = false;
+        sc.box.add_child(this._doctorLabel);
+        this._root.add_child(sc.box);
+
+        // contatos
+        const sk = section(_('Contatos'));
+        this._addBtn = button(_('+ adicionar'), 'wab-btn-sm', () => this._toggleAdd());
+        sk.head.add_child(this._addBtn);
+        this._search = new St.Entry({hint_text: _('Buscar contato…'), can_focus: true, style_class: 'wab-entry', x_expand: true});
+        this._search.clutter_text.connect('text-changed', () => {
+            this._query = this._search.get_text();
+            this._renderContacts();
+        });
+        sk.box.add_child(this._search);
+
+        this._addForm = new St.BoxLayout({style_class: 'wab-form'});
+        this._addName = new St.Entry({hint_text: _('Nome'), can_focus: true, style_class: 'wab-entry', x_expand: true});
+        this._addPhone = new St.Entry({hint_text: _('Telefone com DDD'), can_focus: true, style_class: 'wab-entry', x_expand: true});
+        this._addName.clutter_text.connect('activate', () => this._addPhone.grab_key_focus());
+        this._addPhone.clutter_text.connect('activate', () => this._saveNew());
+        this._addForm.add_child(this._addName);
+        this._addForm.add_child(this._addPhone);
+        this._addForm.add_child(button(_('Salvar'), 'wab-btn-main wab-btn-sm', () => this._saveNew()));
+        this._addForm.visible = false;
+        sk.box.add_child(this._addForm);
+
+        this._list = new St.BoxLayout({vertical: true, style_class: 'wab-list'});
+        sk.box.add_child(this._list);
+        this._count = label('', 'wab-hint');
+        sk.box.add_child(this._count);
+        this._root.add_child(sk.box);
+
+        // rodapé
+        const foot = new St.BoxLayout({style_class: 'wab-foot'});
+        const mk = (text, fn) => {
+            const b = button(text, '', fn);
+            b.x_expand = true;
+            return b;
+        };
+        foot.add_child(mk(_('Verificar'), () => this._refreshDoctor()));
+        foot.add_child(mk(_('Logs'), () => {
+            if (!openLogsTerminal())
+                this._notifyError(_('Não foi possível abrir os logs'), _('Nenhum terminal compatível foi encontrado.'));
+        }));
+        foot.add_child(mk(_('Ajustes'), () => {
+            this.menu.close();
+            this._ext.openPreferences();
+        }));
+        this._root.add_child(foot);
+
+        this._renderContacts();
+        this._applyState();
+    }
+
+    // ------------------------------------------------------------------ estado
+    _state() {
+        return deriveState({
+            service: this._service, health: this._health, conversation: this._conv, doctor: this._doctor, pending: this._pending,
         });
     }
 
-    _schedulePoll() {
-        if (this._pollTimeoutId) {
-            GLib.source_remove(this._pollTimeoutId);
-            this._pollTimeoutId = null;
+    _served() {
+        return servedContacts(this._contacts).length;
+    }
+
+    _applyState() {
+        if (this._destroyed)
+            return;
+        const st = this._state();
+        const s = STATES[st];
+        this._bar.style_class = `wab-bar ${s.cls}`;
+        this._avatar.style_class = `wab-avatar ${s.cls}`;
+        this._pill.text = _(s.pill);
+        this._pill.style_class = `wab-pill ${s.pillCls}`;
+        this._sub.text = subtitle(st, this._served(), _);
+
+        const running = this._service === 'active' || this._service === 'activating';
+        const dotCls = {off: 'off', pending: 'warn', starting: 'warn', disconnected: 'warn', on: 'ok', convOn: 'ok', problem: 'err', error: 'err'}[st];
+        this._dot.style_class = `wab-dot wab-dot-${dotCls}`;
+        this._bridgeText.text = _(s.label.split(' · ')[0]);
+        this._bridgeHint.text = running ? _('serviço ativo') : _('serviço parado');
+        this._bridgeBtn.label = this._pending ? _('Aguarde…') : running ? _('Desligar') : _('Ligar');
+        this._bridgeBtn.reactive = !this._pending;
+        this._switch.state = !!this._conv?.enabled;
+        this._switchBtn.reactive = !this._pending;
+
+        for (const [key, dot] of Object.entries(this._chips)) {
+            const v = doctorChips(this._doctor)[key];
+            dot.style_class = `wab-dot wab-dot-${{ok: 'ok', aviso: 'warn', falha: 'err'}[v] ?? 'off'}`;
         }
-        const interval = Math.max(2, this._settings.get_int('poll-interval'));
-        this._pollTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, interval, () => {
-            if (this._destroyed)
+        this._doctorLabel.text = this._doctorMsg;
+        this._doctorLabel.visible = !!this._doctorMsg;
+    }
+
+    // ------------------------------------------------------------------ atualização
+    async _refreshService() {
+        const svc = await this._bridge.service();
+        const health = svc === 'active' ? await this._bridge.health() : null;
+        if (this._destroyed)
+            return;
+        this._service = svc;
+        this._health = health;
+        this._applyState();
+    }
+
+    async _refreshData() {
+        const [ag, au] = await Promise.all([this._wpp.json(['agenda', '--full']), this._wpp.json(['auto', 'status'])]);
+        if (this._destroyed)
+            return;
+        this._wppMissing = /não encontrado/.test(ag.stderr);
+        if (Array.isArray(ag.data))
+            this._contacts = ag.data;
+        if (au.data && typeof au.data === 'object')
+            this._conv = au.data;
+        this._renderContacts();
+        this._applyState();
+    }
+
+    async _refreshDoctor() {
+        this._doctorMsg = _('Verificando…');
+        this._applyState();
+        const r = await this._wpp.run(['doctor'], 15);
+        if (this._destroyed)
+            return;
+        this._doctor = parseDoctor(r.stdout);
+        this._doctorMsg = this._doctor.length ? doctorSummary(this._doctor) : _('Não foi possível rodar o wpp doctor');
+        this._applyState();
+    }
+
+    _onUnitChanged() {
+        this._refreshService();
+        this._burst(15); // enquanto o bridge sobe, confirma a sessão a cada 2 s (limitado)
+    }
+
+    _burst(times) {
+        this._burstLeft = times;
+        if (this._burstId)
+            return;
+        this._burstId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
+            if (this._destroyed || --this._burstLeft <= 0) {
+                this._burstId = 0;
                 return GLib.SOURCE_REMOVE;
-            this._poll();
+            }
+            this._refreshService();
+            const st = this._state();
+            if (st === 'on' || st === 'convOn' || st === 'off' || st === 'problem') {
+                this._burstId = 0;
+                return GLib.SOURCE_REMOVE;
+            }
             return GLib.SOURCE_CONTINUE;
         });
     }
 
-    _applyState(state) {
-        if (this._destroyed)
+    _onOpen(open) {
+        if (this._pollId) {
+            GLib.source_remove(this._pollId);
+            this._pollId = 0;
+        }
+        if (!open)
             return;
-        this._state = state;
-        const s = STATE[state] ?? STATE.error;
-        this._panelIcon.icon_name = s.icon;
-        this._panelIcon.style_class = `system-status-icon ${s.cls}`;
-        if (this._tab === 'status') // não destrói a aba de contatos (e o foco da busca) a cada poll
-            this._rebuild();
-    }
-
-    _poll() {
-        if (this._destroyed || this._pending)
-            return; // não deixa o poll pisar num toggle em andamento
-        checkStatus(status => {
-            if (this._destroyed || this._pending)
-                return;
-            if (status === 'inactive' || status === 'failed') {
-                this._applyState('off');
-                return;
-            }
-            if (status !== 'active') {
-                this._applyState('error');
-                return;
-            }
-            // Serviço ativo não é o mesmo que "conectado ao WhatsApp": o
-            // processo pode estar de pé sem sessão válida (ex.: logout, ou
-            // ainda subindo). Confirma via /api/status do próprio bridge.
-            checkBridgeHealth(health => {
-                if (this._destroyed || this._pending)
-                    return;
-                if (!health)
-                    this._applyState('starting');
-                else if (health.connected && health.logged_in)
-                    this._applyState('on');
-                else
-                    this._applyState('disconnected');
-            });
+        this._refreshService();
+        this._refreshData();
+        this._refreshDoctor();
+        // só enquanto o menu está aberto
+        const every = Math.max(2, this._settings.get_int('poll-interval'));
+        this._pollId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, every, () => {
+            if (this._destroyed)
+                return GLib.SOURCE_REMOVE;
+            this._refreshService();
+            return GLib.SOURCE_CONTINUE;
         });
     }
 
-    _toggle() {
+    // ------------------------------------------------------------------ ações
+    async _toggleBridge() {
         if (this._pending || this._destroyed)
             return;
-        const isRunning = this._state !== 'off';
-        const action = isRunning ? 'stop' : 'start';
+        const running = this._service === 'active' || this._service === 'activating';
         this._pending = true;
-        this._applyState('pending');
-        runSystemctl(action, (ok, stderr) => {
-            if (this._destroyed)
-                return;
-            this._pending = false;
-            if (!ok) {
-                const verb = action === 'start' ? _('ligar') : _('desligar');
-                this._notifyError(_('Falha ao %s a bridge').format(verb), stderr);
-            }
-            this._poll();
-        });
+        this._applyState();
+        const r = await this._bridge.action(running ? 'stop' : 'start');
+        if (this._destroyed)
+            return;
+        this._pending = false;
+        if (!r.ok) {
+            this._notifyError(running ? _('Falha ao desligar o bridge') : _('Falha ao ligar o bridge'), r.stderr);
+        }
+        await this._refreshService();
+        this._burst(15);
     }
 
+    async _toggleConversation() {
+        if (this._pending || this._destroyed)
+            return;
+        const turnOn = !this._conv?.enabled;
+        this._pending = true;
+        this._applyState();
+        const r = await this._wpp.json(['auto', turnOn ? 'on' : 'off']);
+        if (this._destroyed)
+            return;
+        this._pending = false;
+        if (!r.ok)
+            this._notifyError(_('Não foi possível mudar o modo conversacional'), r.data?.message ?? r.stderr);
+        await this._refreshData();
+        this._refreshDoctor();
+    }
+
+    async _setMode(c, mode, confirmed = false) {
+        if (this._pending || this._destroyed || c.reply_mode === mode)
+            return;
+        if (mode === 'auto' && !confirmed) {
+            this._confirm = c.phone; // a interface pede confirmação (o wpp exige --yes)
+            this._renderContacts();
+            return;
+        }
+        this._confirm = null;
+        this._pending = true;
+        const r = await this._wpp.json(modeArgs(c.phone, mode, confirmed));
+        if (this._destroyed)
+            return;
+        this._pending = false;
+        if (!r.ok)
+            this._notifyError(_('Não foi possível mudar o modo de %s').format(c.name), r.data?.message ?? r.stderr);
+        await this._refreshData();
+    }
+
+    async _saveContext(c, text) {
+        if (this._pending || this._destroyed)
+            return;
+        this._pending = true;
+        const r = await this._wpp.json(contextArgs(c.phone, text));
+        if (this._destroyed)
+            return;
+        this._pending = false;
+        if (!r.ok)
+            this._notifyError(_('Não foi possível salvar o contexto'), r.data?.message ?? r.stderr);
+        this._expanded = null;
+        this._ctxDraft = '';
+        await this._refreshData();
+    }
+
+    _toggleAdd() {
+        this._addOpen = !this._addOpen;
+        this._addForm.visible = this._addOpen;
+        if (this._addOpen)
+            this._addName.grab_key_focus();
+    }
+
+    async _saveNew() {
+        const name = this._addName.get_text().trim();
+        const phone = this._addPhone.get_text().trim();
+        if (!name || !validPhone(phone)) {
+            this._notifyError(_('Dados inválidos'), _('Informe o nome e um telefone com DDD.'));
+            return;
+        }
+        const r = await this._wpp.json(['save', name, phone.replace(/\D/g, '')]);
+        if (this._destroyed)
+            return;
+        if (!r.ok) {
+            this._notifyError(_('Não foi possível salvar o contato'), r.data?.message ?? r.stderr);
+            return;
+        }
+        this._addName.set_text('');
+        this._addPhone.set_text('');
+        this._toggleAdd();
+        this._query = name;
+        this._search.set_text(name);
+        await this._refreshData();
+    }
+
+    // ------------------------------------------------------------------ contatos
+    _renderContacts() {
+        if (this._destroyed)
+            return;
+        this._list.destroy_all_children();
+        if (this._wppMissing) {
+            this._list.add_child(label(_('Comando wpp não encontrado. Instale com o install.sh do projeto.'), 'wab-hint'));
+            this._count.text = '';
+            return;
+        }
+        const rows = visibleContacts(this._contacts, this._query, VISIBLE_LIMIT);
+        for (const c of rows)
+            this._list.add_child(this._contactRow(c));
+        const searching = this._query.trim().length >= 2;
+        if (!rows.length) {
+            this._list.add_child(label(searching ? _('Nenhum contato encontrado.') : _('Nenhum contato atendido. Busque um contato para ligar.'), 'wab-hint'));
+        }
+        this._count.text = searching
+            ? _('%d resultado(s) de %d contatos').format(rows.length, this._contacts.length)
+            : _('%d atendido(s) de %d contatos · busque para ver os outros').format(rows.length, this._contacts.length);
+    }
+
+    _contactRow(c) {
+        const box = new St.BoxLayout({vertical: true, style_class: 'wab-crow'});
+        const top = new St.BoxLayout({style_class: 'wab-row'});
+
+        const info = new St.Button({can_focus: true, x_expand: true, style_class: 'wab-crow-info', x_align: Clutter.ActorAlign.FILL});
+        const infoBox = new St.BoxLayout({style_class: 'wab-row', x_expand: true, x_align: Clutter.ActorAlign.START});
+        infoBox.add_child(label(initial(c.name), 'wab-av2'));
+        const names = new St.BoxLayout({vertical: true, x_expand: true, x_align: Clutter.ActorAlign.START});
+        names.add_child(label(c.name, 'wab-text wab-ellipsis'));
+        names.add_child(label(c.context || formatPhone(c.phone), 'wab-hint wab-ellipsis'));
+        infoBox.add_child(names);
+        info.set_child(infoBox);
+        info.connect('clicked', () => {
+            this._expanded = this._expanded === c.phone ? null : c.phone;
+            this._ctxDraft = c.context ?? '';
+            this._renderContacts();
+        });
+        top.add_child(info);
+
+        const seg = new St.BoxLayout({style_class: 'wab-seg'});
+        for (const m of MODES) {
+            const on = c.reply_mode === m;
+            const b = new St.Button({
+                label: MODE_LABEL[m], can_focus: true, accessible_name: `${c.name}: ${MODE_NAME[m]}`,
+                style_class: `wab-seg-btn wab-seg-${m}${on ? ' wab-seg-on' : ''}`,
+            });
+            b.connect('clicked', () => this._setMode(c, m));
+            seg.add_child(b);
+        }
+        top.add_child(seg);
+        box.add_child(top);
+
+        if (this._confirm === c.phone) {
+            const bar = new St.BoxLayout({vertical: true, style_class: 'wab-confirm'});
+            const msg = label(_('Responder sozinho a %s? O agente enviará mensagens de verdade.').format(c.name), 'wab-hint');
+            msg.clutter_text.set_line_wrap(true);
+            bar.add_child(msg);
+            const act = new St.BoxLayout({style_class: 'wab-row'});
+            act.add_child(button(_('Confirmar automático'), 'wab-btn-main wab-btn-sm', () => this._setMode(c, 'auto', true)));
+            act.add_child(button(_('Cancelar'), 'wab-btn-sm', () => {
+                this._confirm = null;
+                this._renderContacts();
+            }));
+            bar.add_child(act);
+            box.add_child(bar);
+        }
+
+        if (this._expanded === c.phone) {
+            const ctx = new St.BoxLayout({vertical: true, style_class: 'wab-ctx'});
+            const entry = new St.Entry({hint_text: _('Assunto da conversa'), can_focus: true, style_class: 'wab-entry', text: this._ctxDraft});
+            entry.clutter_text.connect('text-changed', () => {
+                this._ctxDraft = entry.get_text();
+            });
+            entry.clutter_text.connect('activate', () => this._saveContext(c, entry.get_text()));
+            ctx.add_child(entry);
+            const hint = label(_('O agente segue este assunto; fora dele, relata a você.'), 'wab-hint');
+            hint.clutter_text.set_line_wrap(true);
+            ctx.add_child(hint);
+            const act = new St.BoxLayout({style_class: 'wab-row'});
+            act.add_child(button(_('Salvar contexto'), 'wab-btn-main wab-btn-sm', () => this._saveContext(c, entry.get_text())));
+            ctx.add_child(act);
+            box.add_child(ctx);
+        }
+        return box;
+    }
+
+    // ------------------------------------------------------------------ avisos e limpeza
     _notifyError(title, detail) {
         if (!this._settings.get_boolean('show-notifications'))
             return;
         try {
             if (!this._notifSource) {
-                this._notifSource = new MessageTray.Source({
-                    title: _('WhatsApp Bridge'),
-                    iconName: 'dialog-warning-symbolic',
-                });
+                this._notifSource = new MessageTray.Source({title: _('WhatsApp Bridge'), iconName: 'dialog-warning-symbolic'});
                 this._notifSource.connect('destroy', () => {
                     this._notifSource = null;
                 });
                 Main.messageTray.add(this._notifSource);
             }
-            const notification = new MessageTray.Notification({
-                source: this._notifSource,
-                title,
-                body: detail || _('Veja os logs para mais detalhes.'),
+            this._notifSource.addNotification(new MessageTray.Notification({
+                source: this._notifSource, title, body: detail || _('Veja os logs para mais detalhes.'),
                 iconName: 'dialog-warning-symbolic',
-            });
-            this._notifSource.addNotification(notification);
+            }));
         } catch (e) {
             logError(e, 'whatsapp-bridge: falha ao mostrar notificação de erro');
         }
     }
 
-
-    _addTabBar() {
-        const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
-        const bar = new St.BoxLayout({style_class: 'wab-tabs', x_expand: true});
-        for (const [id, text] of [['status', _('Status')], ['contacts', _('Contatos')]]) {
-            const btn = new St.Button({
-                label: text, can_focus: true, x_expand: true,
-                style_class: `wab-tab${this._tab === id ? ' wab-tab-active' : ''}`,
-            });
-            btn.connect('clicked', () => {
-                if (this._tab === id)
-                    return;
-                this._tab = id;
-                this._rebuild();
-            });
-            bar.add_child(btn);
-        }
-        item.add_child(bar);
-        this.menu.addMenuItem(item);
-    }
-
-    _buildContactsTab() {
-        const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
-        const box = new St.BoxLayout({vertical: true, x_expand: true, style_class: 'wab-contacts'});
-
-        this._search = new St.Entry({hint_text: _('Buscar contato…'), can_focus: true, style_class: 'wab-entry'});
-        this._search.clutter_text.connect('text-changed', () => this._renderContacts());
-        box.add_child(this._search);
-
-        this._scroll = new St.ScrollView({style_class: 'wab-contacts-scroll', overlay_scrollbars: true});
-        this._list = new St.BoxLayout({vertical: true});
-        this._scroll.set_child(this._list);
-        box.add_child(this._scroll);
-
-        this._countLabel = new St.Label({style_class: 'wab-contacts-count'});
-        box.add_child(this._countLabel);
-
-        const form = new St.BoxLayout({style_class: 'wab-form'});
-        this._nameEntry = new St.Entry({hint_text: _('Nome'), can_focus: true, x_expand: true, style_class: 'wab-entry'});
-        this._phoneEntry = new St.Entry({hint_text: _('Telefone'), can_focus: true, x_expand: true, style_class: 'wab-entry'});
-        this._saveBtn = new St.Button({label: _('Salvar'), can_focus: true, style_class: 'wab-btn'});
-        this._saveBtn.connect('clicked', () => this._saveFromForm());
-        this._phoneEntry.clutter_text.connect('activate', () => this._saveFromForm());
-        this._nameEntry.clutter_text.connect('activate', () => this._phoneEntry.grab_key_focus());
-        form.add_child(this._nameEntry);
-        form.add_child(this._phoneEntry);
-        form.add_child(this._saveBtn);
-        box.add_child(form);
-
-        item.add_child(box);
-        this.menu.addMenuItem(item);
-        this._contacts = loadContacts();
-        this._renderContacts();
-        this._search.grab_key_focus();
-    }
-
-    _renderContacts() {
-        if (!this._list)
-            return;
-        this._list.destroy_all_children();
-        const q = this._search.get_text().trim().toLowerCase();
-        const qd = q.replace(/\D/g, '');
-        const matches = this._contacts.filter(c =>
-            !q || c.name.toLowerCase().includes(q) || (qd && c.phone.includes(qd)));
-        this._countLabel.text = matches.length > CONTACTS_RENDER_LIMIT
-            ? _('Mostrando %d de %d — refine a busca').format(CONTACTS_RENDER_LIMIT, matches.length)
-            : _('%d contatos').format(matches.length);
-
-        for (const c of matches.slice(0, CONTACTS_RENDER_LIMIT)) {
-            const row = new St.BoxLayout({style_class: 'wab-row'});
-            const info = new St.Button({can_focus: true, x_expand: true, style_class: 'wab-row-info'});
-            const col = new St.BoxLayout({vertical: true});
-            col.add_child(new St.Label({text: c.name, style_class: 'wab-row-name'}));
-            col.add_child(new St.Label({text: c.phone, style_class: 'wab-row-phone'}));
-            info.set_child(col);
-            // clicar edita: preenche o formulário com o contato
-            info.connect('clicked', () => {
-                this._editingPhone = c.phone;
-                this._nameEntry.set_text(c.name);
-                this._phoneEntry.set_text(c.phone);
-                this._saveBtn.label = _('Atualizar');
-                this._nameEntry.grab_key_focus();
-            });
-            row.add_child(info);
-
-            // Escolhe em quais contatos o modo conversacional atua: off -> rascunho -> auto -> off
-            const mode = c.profile?.reply_mode ?? 'off';
-            const modeBtn = new St.Button({
-                label: {off: _('Conversa: off'), draft: _('Conversa: rascunho'), auto: _('Conversa: AUTO')}[mode] ?? _('Conversa: off'),
-                can_focus: true, style_class: 'wab-btn',
-            });
-            modeBtn.connect('clicked', () => this._cycleReplyMode(c.phone));
-            row.add_child(modeBtn);
-
-            const del = new St.Button({
-                child: new St.Icon({icon_name: 'user-trash-symbolic', icon_size: 14}),
-                can_focus: true, style_class: 'wab-icon-btn',
-            });
-            del.connect('clicked', () => {
-                this._contacts = this._contacts.filter(x => x.phone !== c.phone);
-                this._persist();
-                this._renderContacts();
-            });
-            row.add_child(del);
-            this._list.add_child(row);
-        }
-    }
-
-    _cycleReplyMode(phone) {
-        // recarrega do disco: o MCP ou o usuário podem ter editado o arquivo
-        this._contacts = loadContacts();
-        const c = this._contacts.find(x => x.phone === phone);
-        if (!c)
-            return;
-        const order = ['off', 'draft', 'auto'];
-        const current = c.profile?.reply_mode ?? 'off';
-        const next = order[(order.indexOf(current) + 1) % order.length];
-        c.profile = {...(c.profile ?? {}), reply_mode: next};
-        this._persist();
-        this._renderContacts();
-    }
-
-    _persist() {
-        try {
-            saveContacts(this._contacts);
-        } catch (e) {
-            logError(e, 'whatsapp-bridge: falha ao salvar contacts.json');
-            this._notifyError(_('Não foi possível salvar os contatos'), String(e.message ?? e));
-        }
-    }
-
-    _saveFromForm() {
-        const name = this._nameEntry.get_text().trim();
-        const phone = normalizePhone(this._phoneEntry.get_text());
-        if (!name || !phone)
-            return;
-        // recarrega do disco: o MCP ou o usuário podem ter editado o arquivo
-        this._contacts = loadContacts();
-        const oldPhone = this._editingPhone ?? phone;
-        const existing = this._contacts.find(c => c.phone === oldPhone);
-        if (existing) {
-            existing.name = name;
-            existing.phone = phone;
-        } else {
-            this._contacts.push({name, phone, notes: ''});
-        }
-        // se o telefone mudou e colide com outro, mantém um só
-        this._contacts = this._contacts.filter((c, i, a) => a.findIndex(x => x.phone === c.phone) === i);
-        this._persist();
-        this._editingPhone = null;
-        this._nameEntry.set_text('');
-        this._phoneEntry.set_text('');
-        this._saveBtn.label = _('Salvar');
-        this._renderContacts();
-    }
-
-    _toggleConversation(enable) {
-        try {
-            const state = loadConversation();
-            if (enable && !(state.agent_id && state.routine_id)) {
-                this._notifyError(_('Modo conversacional'),
-                    _('Configure a rotina do OpenBot antes de ligar (ferramenta conversation_mode).'));
-                this._rebuild();
-                return;
-            }
-            state.enabled = enable;
-            if (enable) {
-                // cursor vazio: o vigia começa do ponto atual e não responde o histórico
-                state.cursor = null;
-                state.enabled_at = new Date().toISOString().slice(0, 19);
-            }
-            saveConversation(state);
-        } catch (e) {
-            logError(e, 'whatsapp-bridge: falha ao salvar conversation_mode.json');
-            this._notifyError(_('Não foi possível alterar o modo conversacional'), String(e.message ?? e));
-            this._rebuild();
-        }
-    }
-
-    _rebuild() {
-        if (this._destroyed)
-            return;
-        this.menu.removeAll();
-
-        this._addTabBar();
-        if (this._tab === 'contacts') {
-            this._buildContactsTab();
-            return;
-        }
-
-        const s = STATE[this._state] ?? STATE.error;
-
-        const header = new PopupMenu.PopupBaseMenuItem({
-            reactive: false, can_focus: false, style_class: 'wab-header',
-        });
-        const box = new St.BoxLayout({vertical: true, style_class: 'wab-header-box'});
-        box.add_child(new St.Label({text: _('WhatsApp Bridge'), style_class: 'wab-header-title'}));
-        const subtitle = new St.Label({text: _(s.label), style_class: `wab-header-subtitle ${s.cls}`});
-        subtitle.clutter_text.set_line_wrap(true);
-        box.add_child(subtitle);
-        header.add_child(box);
-        this.menu.addMenuItem(header);
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        const isRunning = this._state !== 'off';
-        const label = this._pending ? _('Aguarde…') : isRunning ? _('Desligar bridge') : _('Ligar bridge');
-        const icon = isRunning ? 'media-playback-stop-symbolic' : 'media-playback-start-symbolic';
-        const toggleItem = new PopupMenu.PopupImageMenuItem(label, icon);
-        toggleItem.setSensitive(!this._pending);
-        toggleItem.connect('activate', () => this._toggle());
-        this.menu.addMenuItem(toggleItem);
-
-        const conv = loadConversation();
-        const served = loadContacts().filter(c => ['draft', 'auto'].includes(c.profile?.reply_mode)).length;
-        const convItem = new PopupMenu.PopupSwitchMenuItem(
-            _('Modo conversacional (%d contatos)').format(served), !!conv.enabled);
-        convItem.connect('toggled', (_item, state) => this._toggleConversation(state));
-        this.menu.addMenuItem(convItem);
-
-        const logsItem = new PopupMenu.PopupImageMenuItem(_('Ver logs'), 'utilities-terminal-symbolic');
-        logsItem.connect('activate', () => {
-            if (!openLogsTerminal())
-                this._notifyError(_('Não foi possível abrir os logs'), _('Nenhum terminal compatível foi encontrado (ptyxis, gnome-terminal, konsole ou xterm).'));
-        });
-        this.menu.addMenuItem(logsItem);
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        const prefsItem = new PopupMenu.PopupImageMenuItem(_('Configurações'), 'preferences-system-symbolic');
-        prefsItem.connect('activate', () => this._extension.openPreferences());
-        this.menu.addMenuItem(prefsItem);
-    }
-
-    _onDestroy() {
+    _cleanup() {
         this._destroyed = true;
-        if (this._pollTimeoutId) {
-            GLib.source_remove(this._pollTimeoutId);
-            this._pollTimeoutId = null;
+        for (const id of [this._pollId, this._burstId]) {
+            if (id)
+                GLib.source_remove(id);
         }
-        this._notifSource?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
+        this._pollId = 0;
+        this._burstId = 0;
+        this._bridge.destroy();
+        this._wpp.destroy();
+        this._notifSource?.destroy();
         this._notifSource = null;
-        this._panelIcon = null;
-        this._settings = null;
-        this._list = null;
-        super._onDestroy();
     }
 });
 
 export default class WhatsAppBridgeExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
-        this._posHandler = this._settings.connect('changed::panel-position',
-            () => this._reposition());
+        this._posHandler = this._settings.connect('changed::panel-position', () => this._reposition());
         this._create();
     }
 
     _create() {
         this._indicator = new Indicator(this);
-        const pos = this._settings.get_string('panel-position');
-        switch (pos) {
-            case 'left':
-                Main.panel.addToStatusArea(this.uuid, this._indicator, -1, 'left');
-                break;
-            case 'left-edge':
-                Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'left');
-                break;
-            default: // 'right'
-                Main.panel.addToStatusArea(this.uuid, this._indicator);
-                break;
+        switch (this._settings.get_string('panel-position')) {
+        case 'left':
+            Main.panel.addToStatusArea(this.uuid, this._indicator, -1, 'left');
+            break;
+        case 'left-edge':
+            Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'left');
+            break;
+        default:
+            Main.panel.addToStatusArea(this.uuid, this._indicator);
         }
     }
 
     _reposition() {
-        delete Main.panel.statusArea[this.uuid];
         this._indicator?.destroy();
         this._indicator = null;
         this._create();

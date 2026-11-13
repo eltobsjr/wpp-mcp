@@ -1,24 +1,93 @@
-.wab-header-box { spacing: 2px; padding: 4px 8px; }
-.wab-header-title { font-weight: 800; font-size: 1.1em; color: {{text}}; }
-.wab-header-subtitle { font-size: 0.82em; }
+/* WhatsApp Bridge — tokens do tema (Eltob Indicator Design v1). Nada de hex aqui; o instalador gera o stylesheet.css. */
 
-.wab-icon-on, .wab-header-subtitle.wab-icon-on { color: {{ok}}; }
-.wab-icon-off, .wab-header-subtitle.wab-icon-off { color: {{off}}; }
-.wab-icon-pending, .wab-header-subtitle.wab-icon-pending { color: {{warn}}; }
-.wab-icon-error, .wab-header-subtitle.wab-icon-error { color: {{crit}}; }
+/* ---- ícone no painel: anel de estado ---- */
+.wab-bar { border: 2px solid {{overlay1}}; border-radius: 100px; padding: 2px; margin: 0 2px; color: {{overlay1}}; }
+.wab-bar-icon { icon-size: 14px; }
+.wab-bar.wab-st-off  { border-color: {{overlay1}}; color: {{overlay1}}; }
+.wab-bar.wab-st-warn { border-color: {{yellow}}; color: {{yellow}}; }
+.wab-bar.wab-st-on   { border-color: {{green}}; color: {{green}}; }
+.wab-bar.wab-st-conv { border-color: {{green}}; color: {{green}}; background-color: rgba({{green.rgb}}, 0.22); }
+.wab-bar.wab-st-err  { border-color: {{red}}; color: {{red}}; }
 
-.wab-tabs { spacing: 4px; }
-.wab-tab { padding: 4px 10px; border-radius: 8px; font-weight: 700; color: {{text}}; }
-.wab-tab-active { background-color: rgba(128,128,128,0.25); }
-.wab-contacts { spacing: 6px; min-width: 340px; }
-.wab-contacts-scroll { max-height: 280px; }
-.wab-contacts-count { font-size: 0.8em; color: {{off}}; }
-.wab-row { spacing: 4px; padding: 2px 0; }
-.wab-row-info { padding: 3px 6px; border-radius: 6px; text-align: left; }
-.wab-row-info:hover, .wab-row-info:focus { background-color: rgba(128,128,128,0.2); }
-.wab-row-name { font-weight: 600; color: {{text}}; }
-.wab-row-phone { font-size: 0.8em; color: {{off}}; }
-.wab-icon-btn { padding: 4px 6px; border-radius: 6px; color: {{crit}}; }
-.wab-icon-btn:hover, .wab-icon-btn:focus { background-color: rgba(128,128,128,0.2); }
-.wab-form { spacing: 4px; }
-.wab-btn { padding: 4px 10px; border-radius: 8px; font-weight: 700; background-color: rgba(128,128,128,0.25); color: {{text}}; }
+/* ---- menu ---- */
+.wab-item { padding: 0 14px 12px; }
+.wab-item:hover, .wab-item:focus { background-color: transparent; }
+.wab-root { width: 340px; spacing: 0; }
+
+/* cabeçalho */
+.wab-head { spacing: 10px; padding: 10px 0 8px; }
+.wab-avatar { width: 38px; height: 38px; border-radius: 100px; background-color: rgba({{surface1.rgb}}, 0.6); }
+.wab-avatar-icon { icon-size: 20px; }
+.wab-avatar.wab-st-off  { color: {{overlay1}}; }
+.wab-avatar.wab-st-warn { color: {{yellow}}; background-color: rgba({{yellow.rgb}}, 0.16); }
+.wab-avatar.wab-st-on   { color: {{green}};  background-color: rgba({{green.rgb}}, 0.18); }
+.wab-avatar.wab-st-conv { color: {{green}};  background-color: rgba({{green.rgb}}, 0.28); }
+.wab-avatar.wab-st-err  { color: {{red}};    background-color: rgba({{red.rgb}}, 0.18); }
+.wab-titles { spacing: 1px; }
+.wab-title { font-weight: 800; font-size: 1.1em; color: {{text}}; }
+.wab-sub { font-size: 0.82em; color: {{subtext0}}; }
+.wab-pill { font-size: 0.72em; font-weight: 700; padding: 3px 9px; border-radius: 100px; }
+.wab-pill-ok   { color: {{green}};   background-color: rgba({{green.rgb}}, 0.18); }
+.wab-pill-warn { color: {{yellow}};  background-color: rgba({{yellow.rgb}}, 0.18); }
+.wab-pill-err  { color: {{red}};     background-color: rgba({{red.rgb}}, 0.18); }
+.wab-pill-off  { color: {{subtext0}}; background-color: rgba({{overlay1.rgb}}, 0.22); }
+
+/* seções (cartões) */
+.wab-section { background-color: rgba({{surface0.rgb}}, 0.45); border-radius: 12px; padding: 10px 12px; margin-top: 8px; spacing: 6px; }
+.wab-section-head { spacing: 8px; }
+.wab-section-title { font-size: 0.72em; font-weight: 700; color: {{lavender}}; text-transform: uppercase; letter-spacing: 1px; }
+.wab-row { spacing: 8px; }
+.wab-grow { spacing: 0; }
+.wab-text { color: {{text}}; font-weight: 500; }
+.wab-hint { color: {{subtext0}}; font-size: 0.82em; }
+.wab-doctor { margin-top: 2px; }
+
+/* pontos de estado e chips */
+.wab-dot { width: 8px; height: 8px; border-radius: 100px; background-color: {{overlay1}}; }
+.wab-dot-ok   { background-color: {{green}}; }
+.wab-dot-warn { background-color: {{yellow}}; }
+.wab-dot-err  { background-color: {{red}}; }
+.wab-dot-off  { background-color: {{overlay1}}; }
+.wab-chips { spacing: 6px; }
+.wab-chip { spacing: 5px; padding: 2px 8px; border-radius: 100px; background-color: rgba({{surface1.rgb}}, 0.6); }
+.wab-chip-text { font-size: 0.78em; font-weight: 600; color: {{text}}; }
+
+/* botões */
+.wab-btn { padding: 5px 11px; border-radius: 8px; font-weight: 700; color: {{text}}; background-color: {{surface0}}; border: 2px solid transparent; }
+.wab-btn:hover { background-color: {{surface1}}; }
+.wab-btn:focus { border-color: {{accent}}; }
+.wab-btn-main { background-color: {{accent}}; color: {{base}}; }
+.wab-btn-main:hover { background-color: {{lavender}}; }
+.wab-btn-sm { padding: 3px 8px; font-size: 0.88em; }
+.wab-foot { spacing: 6px; margin-top: 10px; }
+.wab-foot .wab-btn { text-align: center; }
+.wab-switch-btn { padding: 2px; border-radius: 100px; border: 2px solid transparent; }
+.wab-switch-btn:focus { border-color: {{accent}}; }
+
+/* entradas */
+.wab-entry { padding: 6px 9px; border-radius: 8px; color: {{text}}; background-color: {{base}}; border: 1px solid {{surface1}}; caret-color: {{text}}; selection-background-color: {{accent}}; selected-color: {{base}}; }
+.wab-entry:focus { border-color: {{accent}}; }
+.wab-entry StLabel.hint-text { color: {{overlay1}}; }
+.wab-form { spacing: 6px; }
+
+/* contatos */
+.wab-list { spacing: 2px; }
+.wab-crow { spacing: 4px; padding: 3px 0; }
+.wab-crow-info { padding: 3px 4px; border-radius: 8px; border: 2px solid transparent; text-align: left; }
+.wab-crow-info:hover { background-color: rgba({{surface1.rgb}}, 0.55); }
+.wab-crow-info:focus { border-color: {{accent}}; }
+.wab-av2 { width: 26px; height: 26px; border-radius: 100px; background-color: {{surface1}}; color: {{text}}; font-weight: 800; font-size: 0.85em; text-align: center; }
+.wab-ellipsis { max-width: 130px; }
+
+/* seletor segmentado off / rascunho / auto */
+.wab-seg { spacing: 2px; padding: 2px; border-radius: 12px; background-color: rgba({{surface0.rgb}}, 0.45); }
+.wab-seg-btn { padding: 3px 8px; border-radius: 8px; font-size: 0.82em; font-weight: 700; color: {{subtext0}}; border: 1px solid transparent; }
+.wab-seg-btn:hover { background-color: rgba({{surface1.rgb}}, 0.55); }
+.wab-seg-btn:focus { border-color: {{accent}}; }
+.wab-seg-btn.wab-seg-on.wab-seg-off   { color: {{subtext0}}; background-color: rgba({{overlay1.rgb}}, 0.22); border-color: rgba({{overlay1.rgb}}, 0.55); }
+.wab-seg-btn.wab-seg-on.wab-seg-draft { color: {{yellow}};   background-color: rgba({{yellow.rgb}}, 0.20);   border-color: rgba({{yellow.rgb}}, 0.55); }
+.wab-seg-btn.wab-seg-on.wab-seg-auto  { color: {{green}};    background-color: rgba({{green.rgb}}, 0.20);    border-color: rgba({{green.rgb}}, 0.55); }
+
+/* confirmação do modo automático e editor de contexto */
+.wab-confirm { spacing: 6px; padding: 8px 10px; margin: 2px 0 2px 34px; border-radius: 12px; background-color: rgba({{yellow.rgb}}, 0.12); border: 1px solid rgba({{yellow.rgb}}, 0.45); }
+.wab-ctx { spacing: 6px; margin: 2px 0 4px 34px; }

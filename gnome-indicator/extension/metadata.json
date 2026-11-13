@@ -1,8 +1,8 @@
 {
   "uuid": "whatsapp-bridge@eltobsjr.gmail.com",
   "name": "WhatsApp Bridge",
-  "description": "Liga e desliga a bridge do WhatsApp (whatsmeow) usada pelo MCP direto da barra superior, em vez de deixar o serviço sempre ativo em segundo plano.",
-  "version-name": "0.2.0",
+  "description": "Liga e desliga o bridge do WhatsApp na barra superior e escolhe, por contato, quem o agente responde (off, rascunho ou automático) e com qual contexto. Usa o comando wpp.",
+  "version-name": "0.3.0",
   "shell-version": [
     "45",
     "46",

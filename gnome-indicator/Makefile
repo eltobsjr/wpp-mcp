@@ -37,6 +37,7 @@ check:
 		python3 scripts/eltob-setup.py render --template $(EXT)/stylesheet.tpl.css --out $$d/s.css --palette $$p --accent $$a || exit 1; \
 		! grep -q '{{' $$d/s.css || { echo "token sem valor ($$p/$$a)"; exit 1; }; done; done; rm -rf $$d
 	@python3 scripts/eltob-setup.py contrast
+	@node --test tests/logic.test.mjs >/dev/null && echo "testes de lógica ok"
 	@echo "check ok"
 
 # Gera o .zip só da extensão, com o tema padrão (Macchiato/azul) já renderizado
@@ -45,6 +46,9 @@ pack:
 		python3 scripts/eltob-setup.py render --template $$d/stylesheet.tpl.css --out $$d/stylesheet.css --title "WhatsApp Bridge" && rm $$d/stylesheet.tpl.css; \
 		rm -f $(UUID).shell-extension.zip; (cd $$d && zip -qr -FS "$(CURDIR)/$(UUID).shell-extension.zip" .); rm -rf $$d
 	@echo "Pacote: $(UUID).shell-extension.zip"
+
+test:
+	@node --test tests/logic.test.mjs
 
 clean:
 	@rm -f $(UUID).shell-extension.zip $(EXT)/stylesheet.css $(EXT)/schemas/gschemas.compiled

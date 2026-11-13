@@ -4,10 +4,33 @@
 [wpp-mcp](../README.md) sem deixar o serviço sempre ativo. Mostra o estado (ligado,
 desligado, conectando, erro) e controla o serviço `systemd --user`.
 
-## Abas do menu
+![Popup do indicador](docs/popup.png)
 
-- **Status** — liga/desliga a bridge, estado da conexão, logs e configurações.
-- **Contatos** — edita a agenda local (`whatsapp-bridge/store/contacts.json`, a mesma que o servidor MCP usa): busca, adicionar, editar (clique no contato) e remover. O caminho vem do `WorkingDirectory` do serviço systemd.
+## O painel (0.3.0)
+
+Um painel único, no padrão visual da família "Indicator" (mesmo do NitroSense), em cartões:
+
+- **Cabeçalho** — avatar, nome e pílula de estado (ligado, desligado, conectando, erro).
+- **Bridge** — liga/desliga o serviço `whatsapp-bridge.service` (`systemd --user`).
+- **Modo conversacional** — chave geral e chips do que está ativo: vigia, OpenBot e rotina.
+- **Contatos** — só os contatos atendidos aparecem; busque para ver os outros. Clique num contato para escolher **off / rascunho / auto** (automático pede confirmação) e escrever o **assunto da conversa**.
+- **Rodapé** — Verificar (`wpp doctor`), Logs e Ajustes.
+
+Os dados vêm do comando **`wpp`** (`agenda --full`, `contact`, `auto`, `doctor`), não do MCP — o MCP está arquivado em `_arquivo/mcp/` e o indicador não depende dele.
+
+### Como não pesa
+
+Sem polling com o menu fechado: o estado do serviço chega pelo D-Bus do systemd (`PropertiesChanged`) e a agenda por um monitor de arquivos. Com o menu aberto, a verificação roda sob demanda.
+
+### Módulos
+
+| Arquivo | Papel |
+|---|---|
+| `extension/logic.js` | lógica pura (estado, filtros, chips, textos) — testada com `node --test` |
+| `extension/wpp.js` | chama o `wpp` e trata o JSON |
+| `extension/bridge.js` | serviço systemd, `/api/status` |
+| `extension/extension.js` | interface (St) |
+| `extension/prefs.js` | preferências: posição, caminho do `wpp`, intervalo, notificações |
 
 ## Instalação
 
@@ -34,8 +57,9 @@ Detalhes do padrão visual em [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Desenvolvimento
 
-`make check` (sintaxe, schema e tema), `make pack` (gera o .zip) e `make clean`.
+`make check` roda sintaxe, schema, tema (3 paletas × 4 destaques), contraste e os 12 testes de `logic.js`; `make pack` gera o .zip; `make clean` limpa.\n\nDepois de `./install.sh --yes`, saia e entre na sessão (no Wayland o JS só recarrega assim). O prefs.js não tem print: é uma janela libadwaita simples.
 
 ## Licença
 
 MIT, como o restante do wpp-mcp.
+

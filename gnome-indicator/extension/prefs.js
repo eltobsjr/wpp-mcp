@@ -147,6 +147,10 @@ export default class WhatsAppBridgePrefs extends ExtensionPreferences {
         settings.bind('poll-interval', intervalRow, 'value', Gio.SettingsBindFlags.DEFAULT);
         behaviorGroup.add(intervalRow);
 
+        const wppRow = new Adw.EntryRow({title: 'Caminho do comando wpp (vazio = automático)'});
+        settings.bind('wpp-path', wppRow, 'text', Gio.SettingsBindFlags.DEFAULT);
+        behaviorGroup.add(wppRow);
+
         const notifRow = new Adw.SwitchRow({
             title: _('Mostrar notificações de erro'),
             subtitle: _('Avisa quando ligar/desligar a bridge falha ou os logs não abrem'),
