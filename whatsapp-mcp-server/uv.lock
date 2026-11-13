@@ -517,26 +517,24 @@ name = "whatsapp-mcp-server"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "httpx" },
-    { name = "mcp", extra = ["cli"] },
     { name = "requests" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
+    { name = "mcp", extra = ["cli"] },
     { name = "pytest" },
     { name = "ruff" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.6.0" },
-    { name = "requests", specifier = ">=2.32.3" },
-]
+requires-dist = [{ name = "requests", specifier = ">=2.32.3" }]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.6.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.6" },
 ]

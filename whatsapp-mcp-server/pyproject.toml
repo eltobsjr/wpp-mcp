@@ -1,17 +1,18 @@
 [project]
 name = "whatsapp-mcp-server"
 version = "0.1.0"
-description = "Servidor MCP do WhatsApp (ferramentas de leitura, envio e agenda)"
+description = "Núcleo Python e comando wpp do WhatsApp (leitura, envio, agenda, modo conversacional)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "httpx>=0.28.1",
-    "mcp[cli]>=1.6.0",
     "requests>=2.32.3",
 ]
 
 [dependency-groups]
 dev = [
+    # só para testar o MCP arquivado (_arquivo/mcp/)
+    "httpx>=0.28.1",
+    "mcp[cli]>=1.6.0",
     "pytest>=8.0",
     "ruff>=0.6",
 ]
