@@ -721,21 +721,17 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 
 // Extract direct path from a WhatsApp media URL
 func extractDirectPathFromURL(url string) string {
-	// The direct path is typically in the URL, we need to extract it
-	// Example URL: https://mmg.whatsapp.net/v/t62.7118-24/13812002_698058036224062_3424455886509161511_n.enc?ccb=11-4&oh=...
-
-	// Find the path part after the domain
+	// O caminho direto TEM de manter a query string (?ccb=...&oh=...&oe=...&_nc_sid=...): o
+	// whatsmeow monta "https://<host><directPath>&hash=...&mms-type=...", então sem o "?" a URL
+	// fica malformada e o CDN responde 403. Só o sufixo "&mms3=true" (que não faz parte do
+	// caminho direto) é removido.
+	// Exemplo: https://mmg.whatsapp.net/v/t62.7118-24/123_n.enc?ccb=11-4&oh=01_x&oe=6B1E0209&_nc_sid=5e03e0&mms3=true
+	//   -> /v/t62.7118-24/123_n.enc?ccb=11-4&oh=01_x&oe=6B1E0209&_nc_sid=5e03e0
 	parts := strings.SplitN(url, ".net/", 2)
 	if len(parts) < 2 {
-		return url // Return original URL if parsing fails
+		return url // sem domínio reconhecível: devolve como veio
 	}
-
-	pathPart := parts[1]
-
-	// Remove query parameters
-	pathPart = strings.SplitN(pathPart, "?", 2)[0]
-
-	// Create proper direct path format
+	pathPart := strings.TrimSuffix(parts[1], "&mms3=true")
 	return "/" + pathPart
 }
 
