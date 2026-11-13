@@ -77,8 +77,9 @@ def _refresh(force: bool = False) -> Dict[str, object]:
 
     agenda: Dict[str, str] = {}
     for c in saved_contacts._load():
-        for k in phone_keys(c["phone"]):
-            agenda.setdefault(k, c["name"])
+        for ph in saved_contacts.phones_of(c):
+            for k in phone_keys(ph):
+                agenda.setdefault(k, c["name"])
 
     pn2lids: Dict[str, List[str]] = {}
     for lid, pn in lid2pn.items():

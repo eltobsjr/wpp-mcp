@@ -1,18 +1,12 @@
-# WhatsApp Bridge (wpp-mcp)
+# wpp — WhatsApp para agentes
 
-> **Desde 2026-11-13** a interface padrão é o comando **`wpp`** guiado por uma **skill**; o servidor MCP está arquivado em `_arquivo/mcp/`. O bridge, o vigia e o indicador do GNOME seguem iguais. Veja [`docs/GUIA.md`](docs/GUIA.md).
+Ferramenta pessoal para um agente (Claude Code, OpenBot) **ler, enviar e responder** mensagens do **seu** WhatsApp, com travas de segurança no código, modo conversacional por contato e um painel no GNOME. Conecta direto na sua conta pela API multi-dispositivo (biblioteca [whatsmeow](https://github.com/tulir/whatsmeow)); tudo roda local e o histórico fica em SQLite no seu computador.
 
-Ponte de WhatsApp para agentes (Claude Code, OpenBot). Com o comando `wpp` e a skill, o agente consegue buscar e ler suas mensagens pessoais do WhatsApp (incluindo imagens, vídeos, documentos e áudios), buscar contatos e enviar mensagens para pessoas ou grupos, além de enviar arquivos de mídia.
+> **Origem.** Este projeto nasceu como cópia de [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) (MIT, © Luke Harries), mas **deixou de ser um fork** e hoje é outra ferramenta. Do original sobrou o **bridge em Go** (conexão com o WhatsApp), modificado: cerca de 85% das linhas do `main.go` ainda vêm dele, e ele não deixa de ser a base. Todo o resto é novo: o comando `wpp`, a skill, as travas de envio, a agenda, o modo conversacional, o vigia, a sessão ao vivo e o indicador do GNOME. O servidor MCP original (reescrito por aqui) está **arquivado** em `_arquivo/mcp/`. O repositório original fica como referência (remoto `upstream` do git) e a licença MIT com o aviso de copyright dele é mantida em [LICENSE](LICENSE).
 
-A conexão é feita diretamente com a **sua conta pessoal do WhatsApp**, via API multi-dispositivo do WhatsApp Web (usando a biblioteca [whatsmeow](https://github.com/tulir/whatsmeow)). Todas as mensagens ficam armazenadas localmente num banco SQLite e só são enviadas a um LLM (como o Claude) quando o agente acessa esses dados através das ferramentas — o que você controla.
+> **Cuidado:** um agente com acesso a dados privados, a conteúdo de terceiros e a envio de mensagens está sujeito à ["lethal trifecta"](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/). Por isso o envio exige aprovação do dono (ou autorização antecipada por contato, com travas em código).
 
-Exemplo de uso com o Claude:
-
-![WhatsApp MCP](./example-use.png)
-
-> **Cuidado:** como em outros servidores MCP, o WhatsApp MCP está sujeito à ["lethal trifecta"](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/) — a combinação de acesso a dados privados, exposição a conteúdo não confiável e capacidade de comunicação externa. Isso significa que uma prompt injection pode, em teoria, levar à exfiltração de dados privados. Revise o que o agente está fazendo antes de dar carta branca para enviar mensagens.
-
-Este repositório é uma cópia independente, mantida por mim, baseada no projeto original [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) (MIT).
+**O que ele faz, em linguagem simples:** [docs/FUNCIONALIDADES.md](docs/FUNCIONALIDADES.md). **Guia de uso:** [docs/GUIA.md](docs/GUIA.md).
 
 ## O que tem aqui
 
@@ -27,7 +21,7 @@ Este repositório é uma cópia independente, mantida por mim, baseada no projet
 
 Guia único de uso: [docs/GUIA.md](docs/GUIA.md).
 
-## O que é diferente da versão original
+## O que mudou em relação ao projeto original
 
 - **whatsmeow atualizado**, com as chamadas de API já ajustadas para exigir `context.Context`.
 - **API REST do bridge só em `127.0.0.1`** (antes escutava em todas as interfaces de rede — qualquer coisa na sua LAN conseguia mandar mensagem pela sua conta).

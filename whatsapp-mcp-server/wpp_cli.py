@@ -432,6 +432,11 @@ def find(query, limit=10):
 
 def chat_info(chat):
     """Dados de uma conversa por JID (@g.us, @lid, @s.whatsapp.net) ou telefone."""
+    if not chat.isdigit() and "@" not in chat:  # nome de contato ou de grupo
+        try:
+            chat = saved_contacts.resolve(chat)
+        except saved_contacts.RecipientError:
+            return None
     info = get_direct_chat_by_contact(chat) if chat.isdigit() else get_chat(chat)
     return _plain(info) if info else None
 
@@ -459,8 +464,8 @@ def send_path(dest, path, audio=False, file_sender=None, audio_sender=None):
     return {"success": bool(ok), "message": msg}
 
 
-def save_contact(name, phone, notes=""):
-    return {"success": True, "contact": saved_contacts.save_contact(name, phone, notes)}
+def save_contact(name, phone, notes="", also=None):
+    return {"success": True, "contact": saved_contacts.save_contact(name, phone, notes, also)}
 
 
 def forget_contact(name, yes=False):
@@ -579,6 +584,7 @@ def build_parser():
     sv.add_argument("name")
     sv.add_argument("phone")
     sv.add_argument("--notes", default="")
+    sv.add_argument("--also", action="append", default=[], metavar="TEL", help="outro número da mesma pessoa (repita para vários)")
     fg = cmd("forget", "remove um contato da agenda")
     fg.add_argument("name")
     fg.add_argument("--yes", action="store_true", help="confirma a remoção")
@@ -684,13 +690,15 @@ def run(a):
         for x in saved_contacts.list_contacts(a.query):
             pf = x.get("profile") or {}
             row = {"name": x["name"], "phone": x["phone"], "reply_mode": pf.get("reply_mode", "off")}
+            if x.get("alt_phones"):
+                row["alt_phones"] = x["alt_phones"]
             if a.full:
                 row["context"] = pf.get("context", "")
                 row["tone"] = pf.get("tone", "")
             rows.append(row)
         _out(rows)
     elif c == "save":
-        res = save_contact(a.name, a.phone, a.notes)
+        res = save_contact(a.name, a.phone, a.notes, a.also)
         _out(res)
     elif c == "forget":
         res = forget_contact(a.name, a.yes)

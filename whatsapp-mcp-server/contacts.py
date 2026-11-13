@@ -11,6 +11,7 @@ import json
 import os
 import quopri
 import re
+import shutil
 import tempfile
 from typing import Dict, Iterator, List, Optional
 
@@ -59,8 +60,15 @@ def _load() -> List[Dict[str, str]]:
         return []
 
 
+def phones_of(c: Dict[str, object]) -> List[str]:
+    """Telefone principal + números extras do mesmo contato (envio por nome vai sempre para o principal)."""
+    return [c["phone"]] + [p for p in (c.get("alt_phones") or []) if p]
+
+
 def _save(contacts: List[Dict[str, str]]) -> None:
     path = os.path.abspath(CONTACTS_PATH)
+    if os.path.exists(path):  # cópia da versão anterior: desfaz um `forget`/import enganado
+        shutil.copy2(path, path + ".bak")
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump({"contacts": sorted(contacts, key=lambda c: c["name"].lower())},
@@ -77,13 +85,14 @@ def list_contacts(query: Optional[str] = None) -> List[Dict[str, str]]:
         qd = re.sub(r"\D", "", query)
         contacts = [c for c in contacts
                     if (words and all(w in fold(c["name"] + " " + (c.get("notes") or "")) for w in words))
-                    or (len(qd) >= 4 and any(qd in k for k in phone_keys(c["phone"])))]
+                    or (len(qd) >= 4 and any(qd in k for p in phones_of(c) for k in phone_keys(p)))]
     return contacts
 
 
-def save_contact(name: str, phone: str, notes: str = "") -> Dict[str, str]:
-    """Cria ou atualiza (a chave é o telefone)."""
+def save_contact(name: str, phone: str, notes: str = "", also=None) -> Dict[str, str]:
+    """Cria ou atualiza (a chave é o telefone principal). `also`: números extras da mesma pessoa."""
     name, phone = name.strip(), normalize_phone(phone)
+    extra = [x for x in dict.fromkeys(normalize_phone(p) for p in (also or [])) if x and x != phone]
     if not name or not phone:
         raise ValueError("name e phone são obrigatórios")
     with _locked():
@@ -93,9 +102,13 @@ def save_contact(name: str, phone: str, notes: str = "") -> Dict[str, str]:
                 c["name"] = name
                 if notes:
                     c["notes"] = notes
+                if extra:
+                    c["alt_phones"] = list(dict.fromkeys((c.get("alt_phones") or []) + extra))
                 break
         else:
             c = {"name": name, "phone": phone, "notes": notes}
+            if extra:
+                c["alt_phones"] = extra
             contacts.append(c)
         _save(contacts)
     return c
@@ -130,7 +143,7 @@ def _find_in(contacts: List[Dict[str, object]], identifier: str) -> Optional[Dic
     if len(digits) >= 8:
         keys = phone_keys(digits) | phone_keys(normalize_phone(digits))
         for c in contacts:
-            if phone_keys(c["phone"]) & keys:
+            if any(phone_keys(p) & keys for p in phones_of(c)):
                 return c
     return None
 

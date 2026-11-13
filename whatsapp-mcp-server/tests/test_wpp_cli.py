@@ -426,3 +426,24 @@ def test_grupo_resolve_por_nome_e_ambiguo_pede_escolha(tmp_path, monkeypatch):
         saved.resolve("promocoes")
     assert [g["name"] for g in saved.group_chats("promocoes")] == ["Promoções A", "Promoções B"]
     assert saved.group_chats("zé") == []  # só grupos
+
+
+def test_contato_com_dois_numeros_envia_ao_principal_e_reconhece_o_extra(tmp_path, monkeypatch):
+    import contacts as saved
+
+    monkeypatch.setattr(saved, "CONTACTS_PATH", str(tmp_path / "c.json"))
+    saved.save_contact("Breno", "5511999990001", also=["5511999990002", "5511999990001"])
+    c = saved.find_contact("5511999990002")
+    assert c["name"] == "Breno" and c["phone"] == "5511999990001" and c["alt_phones"] == ["5511999990002"]
+    assert saved.resolve("Breno") == "5511999990001"  # por nome: sempre o principal
+    assert saved.list_contacts("99990002")[0]["name"] == "Breno"
+
+
+def test_forget_deixa_copia_bak(tmp_path, monkeypatch):
+    import contacts as saved
+
+    monkeypatch.setattr(saved, "CONTACTS_PATH", str(tmp_path / "c.json"))
+    saved.save_contact("Ana", "5511999990003")
+    saved.save_contact("Caio", "5511999990004")
+    saved.remove_contact("Ana")
+    assert "Ana" in (tmp_path / "c.json.bak").read_text(encoding="utf-8")
