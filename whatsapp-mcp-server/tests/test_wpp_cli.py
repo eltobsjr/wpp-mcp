@@ -381,3 +381,12 @@ def test_dedupe_simula_por_padrao_e_so_grava_com_apply(env):
     antes = open(agenda_path, encoding="utf-8").read()
     r = wpp_cli.dedupe()
     assert r["applied"] is False and open(agenda_path, encoding="utf-8").read() == antes
+
+
+def test_busca_acha_apelido_nas_notas(tmp_path, monkeypatch):
+    import contacts as saved
+
+    monkeypatch.setattr(saved, "CONTACTS_PATH", str(tmp_path / "c.json"))
+    saved.save_contact("Maria Souza", "5511999990001", notes="também salvo como Mariinha")
+    achou = saved.list_contacts("mariinha")
+    assert [c["name"] for c in achou] == ["Maria Souza"]

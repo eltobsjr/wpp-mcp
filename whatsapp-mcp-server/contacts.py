@@ -69,14 +69,14 @@ def _save(contacts: List[Dict[str, str]]) -> None:
 
 
 def list_contacts(query: Optional[str] = None) -> List[Dict[str, str]]:
-    """Sem query, todos. Com query: todas as palavras no nome (sem acento/maiúscula)
+    """Sem query, todos. Com query: todas as palavras no nome ou nas notas/apelidos (sem acento/maiúscula)
     ou o telefone contendo os dígitos (aceita número com ou sem o 9º dígito)."""
     contacts = _load()
     if query:
         words = fold(query).split()
         qd = re.sub(r"\D", "", query)
         contacts = [c for c in contacts
-                    if (words and all(w in fold(c["name"]) for w in words))
+                    if (words and all(w in fold(c["name"] + " " + (c.get("notes") or "")) for w in words))
                     or (len(qd) >= 4 and any(qd in k for k in phone_keys(c["phone"])))]
     return contacts
 
