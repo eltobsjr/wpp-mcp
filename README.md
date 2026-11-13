@@ -1,6 +1,8 @@
-# WhatsApp MCP Server
+# WhatsApp Bridge (wpp-mcp)
 
-Servidor MCP (Model Context Protocol) para WhatsApp. Com ele, o Claude consegue buscar e ler suas mensagens pessoais do WhatsApp (incluindo imagens, vídeos, documentos e áudios), buscar contatos e enviar mensagens para pessoas ou grupos, além de enviar arquivos de mídia.
+> **Desde 2026-11-13** a interface padrão é o comando **`wpp`** guiado por uma **skill**; o servidor MCP está arquivado em `_arquivo/mcp/`. O bridge, o vigia e o indicador do GNOME seguem iguais. Veja [`docs/GUIA.md`](docs/GUIA.md).
+
+Ponte de WhatsApp para agentes (Claude Code, OpenBot). Com o comando `wpp` e a skill, o agente consegue buscar e ler suas mensagens pessoais do WhatsApp (incluindo imagens, vídeos, documentos e áudios), buscar contatos e enviar mensagens para pessoas ou grupos, além de enviar arquivos de mídia.
 
 A conexão é feita diretamente com a **sua conta pessoal do WhatsApp**, via API multi-dispositivo do WhatsApp Web (usando a biblioteca [whatsmeow](https://github.com/tulir/whatsmeow)). Todas as mensagens ficam armazenadas localmente num banco SQLite e só são enviadas a um LLM (como o Claude) quando o agente acessa esses dados através das ferramentas — o que você controla.
 
@@ -14,13 +16,16 @@ Este repositório é uma cópia independente, mantida por mim, baseada no projet
 
 ## O que tem aqui
 
-Três componentes, um repositório só:
-
 | Componente | O que faz |
 |---|---|
-| `whatsapp-bridge/` (Go) | Conecta na API do WhatsApp Web, autentica por QR code, guarda o histórico em SQLite e expõe uma API REST local. |
-| `whatsapp-mcp-server/` (Python) | Servidor MCP: as ferramentas que o Claude usa pra ler/enviar dados do WhatsApp. |
-| `gnome-indicator/` (GJS, opcional) | Ícone na barra do GNOME pra ligar/desligar o bridge sem terminal. |
+| `whatsapp-bridge/` (Go) | Conecta na API do WhatsApp Web, autentica por QR code, guarda o histórico em SQLite e expõe uma API REST local (`127.0.0.1:9090`). |
+| `whatsapp-mcp-server/` (Python) | Núcleo (leitura, agenda, segurança, vigia) e o comando **`wpp`** (`wpp_cli.py`), que é a interface padrão. |
+| `bin/wpp` | Atalho do comando (`~/tools/scripts/wpp` aponta para ele). |
+| `skills` (no OpenBot/Claude) | A skill `whatsapp` ensina o agente a usar o `wpp`, com as regras de aprovação. |
+| `gnome-indicator/` (GJS, opcional) | Painel na barra do GNOME: liga/desliga o bridge, modo conversacional e contatos. |
+| `_arquivo/mcp/` | O servidor MCP original, **arquivado** (README ensina a religar). |
+
+Guia único de uso: [docs/GUIA.md](docs/GUIA.md).
 
 ## O que é diferente da versão original
 
@@ -31,21 +36,21 @@ Três componentes, um repositório só:
 - **Logs sem conteúdo de mensagem**: o bridge loga metadados (remetente, tipo, tamanho) mas não o texto das suas conversas — importante porque, rodando como serviço, esses logs vão parar no `journalctl`.
 - **`print()` do servidor MCP redirecionado para stderr**: como o MCP fala JSON-RPC via stdout, `print()` solto no meio do código podia corromper o protocolo.
 - **Timeout em todas as chamadas HTTP** entre o servidor MCP e o bridge.
-- **Instalador único** (`install.sh`) que builda, ajuda na autenticação, registra o MCP e pergunta se você quer o serviço systemd e/ou o indicador GNOME.
+- **Instalador único** (`install.sh`) que builda, ajuda na autenticação, instala o comando `wpp` e pergunta se você quer o serviço systemd e/ou o indicador GNOME.
 - **Indicador GNOME** pra ligar/desligar o bridge sem deixá-lo sempre ativo em segundo plano.
 
 ## Arquitetura
 
 ```
-Claude ──MCP (stdio)──▶ whatsapp-mcp-server (Python) ──HTTP :9090──▶ whatsapp-bridge (Go) ──▶ WhatsApp
-                                    │                                        │      ▲
-                                    └──────────── lê direto ────────────────▶ SQLite │
-                                                                                      │
-                                              indicador GNOME ── systemctl + /api/status
+agente (skill) ──▶ wpp (CLI) ──▶ núcleo Python ──HTTP :9090──▶ whatsapp-bridge (Go) ──▶ WhatsApp
+                              │             │                              │      ▲
+                              │             └────────── lê direto ───────▶ SQLite │
+                              │                                                   │
+            vigia (wpp-conversation.service) ── aciona o agente      indicador GNOME ── systemctl + /api/status + wpp
 ```
 
-- O **indicador GNOME** não fala com o servidor MCP — ele controla o `systemd` (liga/desliga o processo) e consulta `/api/status` direto no bridge, pelas mesmas portas usadas pelo servidor MCP.
-- O **servidor MCP** é iniciado automaticamente pelo Claude a cada sessão (processo curto, via stdio). O **bridge** é quem precisa ficar rodando continuamente pra manter a sessão do WhatsApp — é ele que o systemd/indicador controlam.
+- O **indicador GNOME** usa o `wpp` e o `systemd`: controla o `systemd` (liga/desliga o processo) e consulta `/api/status` direto no bridge, pelas mesmas portas usadas pelo servidor MCP.
+- O **`wpp`** é um processo curto, chamado a cada comando. O **bridge** é quem precisa ficar rodando continuamente pra manter a sessão do WhatsApp — é ele que o systemd/indicador controlam.
 
 ### Armazenamento
 
@@ -83,7 +88,7 @@ O script:
 1. Confere se `go` e `uv` estão instalados — se não estiverem, **oferece instalar sozinho** (via `dnf`/`apt`/`pacman`/`brew`, conforme o sistema, ou o instalador oficial do `uv`), pedindo confirmação antes de qualquer `sudo`.
 2. Compila o bridge (`whatsapp-bridge/wa-bridge-bin`).
 3. Se ainda não houver sessão salva, roda o bridge em primeiro plano pra você escanear o QR code (**Configurações → Aparelhos conectados → Conectar um aparelho** no celular); assim que aparecer "✓ Connected to WhatsApp!", `Ctrl+C` continua a instalação.
-4. Registra o servidor MCP no Claude Code (`claude mcp add`), se o CLI `claude` estiver disponível — senão, imprime o JSON pra colar manualmente no Claude Desktop/Cursor.
+4. Instala o comando `wpp` em `~/.local/bin` (a interface padrão; o servidor MCP foi arquivado, veja `_arquivo/mcp/README.md`).
 5. Pergunta se quer configurar o bridge como **serviço systemd de usuário** (recomendado — evita depender de um terminal aberto) e se quer deixá-lo subir sozinho no login (por padrão, não).
 6. Se detectar GNOME Shell e o serviço tiver sido configurado, pergunta se quer instalar o **indicador na barra superior**.
 
@@ -116,30 +121,14 @@ go build -o wa-bridge-bin .   # ou: go run main.go
 
 Escaneie o QR code que aparece no terminal. A sessão dura cerca de 20 dias antes de pedir novo escaneamento.
 
-**2. Registrar o servidor MCP**
-
-Claude Code (CLI):
+**2. Instalar o comando `wpp`**
 
 ```bash
-claude mcp add whatsapp --scope user -- \
-  "$(which uv)" --directory "$(pwd)/../whatsapp-mcp-server" run main.py
+ln -sfn "$(pwd)/../bin/wpp" ~/.local/bin/wpp
+wpp doctor
 ```
 
-Claude Desktop / Cursor — copie ajustando os `{{...}}`:
-
-```json
-{
-  "mcpServers": {
-    "whatsapp": {
-      "command": "{{CAMINHO_DO_UV}}",
-      "args": ["--directory", "{{CAMINHO_DO_REPO}}/whatsapp-mcp-server", "run", "main.py"]
-    }
-  }
-}
-```
-
-- `{{CAMINHO_DO_UV}}`: saída de `which uv`
-- `{{CAMINHO_DO_REPO}}`: saída de `pwd` dentro da pasta do repositório clonado
+O servidor MCP original está arquivado em `_arquivo/mcp/` (com instruções para religar). O guia completo está em [`docs/GUIA.md`](docs/GUIA.md).
 
 Salve como `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop, macOS) ou `~/.cursor/mcp.json` (Cursor).
 
@@ -202,7 +191,9 @@ Sem isso: `Binary was compiled with 'CGO_ENABLED=0', go-sqlite3 requires cgo to 
 
 ## O indicador GNOME
 
-Ícone na barra superior com quatro estados:
+![Indicador](gnome-indicator/docs/popup.png)
+
+Painel na barra superior (detalhes em [gnome-indicator/README.md](gnome-indicator/README.md)). A pílula de estado tem quatro situações:
 
 | Ícone | Significado |
 |---|---|
@@ -220,24 +211,21 @@ Se ligar/desligar falhar (ex.: unidade não encontrada), aparece uma notificaç�
 
 ## Uso
 
-Depois de conectado, é só conversar com o Claude normalmente — ele decide quando usar as ferramentas do WhatsApp.
+Depois de conectado, converse com o agente normalmente: a skill `whatsapp` decide quando usar o `wpp` e exige sua aprovação a cada envio (exceto contatos em modo `auto`).
 
-### Ferramentas disponíveis no MCP
+### Comandos do `wpp`
 
-- **search_contacts** — busca contatos por nome ou número (agenda local primeiro, depois os chats do WhatsApp)
-- **list_saved_contacts** / **save_contact** / **remove_saved_contact** — gerenciam a agenda local editável
-- **import_contacts_vcf** — importa contatos de um arquivo `.vcf` exportado do celular
-- **list_messages** — lista mensagens com filtros e contexto opcionais
-- **list_chats** — lista os chats disponíveis com metadados
-- **get_chat** — informações de um chat específico
-- **get_direct_chat_by_contact** — encontra o chat direto com um contato
-- **get_contact_chats** — lista todos os chats envolvendo um contato
-- **get_last_interaction** — última mensagem trocada com um contato
-- **get_message_context** — contexto ao redor de uma mensagem específica
-- **send_message** — envia mensagem para um número ou grupo (JID)
-- **send_file** — envia arquivo (imagem, vídeo, áudio bruto, documento)
-- **send_audio_message** — envia áudio como mensagem de voz do WhatsApp (precisa ser `.ogg` opus, ou ter o ffmpeg instalado)
-- **download_media** — baixa a mídia de uma mensagem e retorna o caminho local do arquivo
+Toda saída é JSON (erros também, com saída 1). Resumo:
+
+| Grupo | Comandos |
+|---|---|
+| Ler | `chats`, `msgs`, `new` (só o que chegou), `thread`, `find`, `chat`, `last`, `context`, `log`, `media`, `profile` |
+| Enviar | `send`, `send-file`, `audio`, `reply` (com `--check`) |
+| Agenda | `agenda [--full]`, `save`, `forget --yes`, `import-vcf`, `dedupe [--apply]`, `contact` |
+| Modo conversacional | `auto status|on|off|config`, `contact --mode off|draft|auto --context ...` |
+| Saúde | `status`, `doctor`, `--version` |
+
+Paridade com o MCP antigo: as 22 ferramentas têm equivalente (há um teste que compara os dois). Detalhes em [docs/GUIA.md](docs/GUIA.md).
 
 ### Agenda de contatos local
 
@@ -247,31 +235,31 @@ A busca de contatos pelos chats do WhatsApp às vezes falha, então existe uma a
 {"contacts": [{"name": "Maria", "phone": "5511999998888", "notes": ""}]}
 ```
 
-- Pode ser editada à mão, pelas tools `save_contact`/`remove_saved_contact` ou pela aba **Contatos** do indicador do GNOME.
-- `search_contacts` mostra a agenda primeiro; `send_message`, `send_file` e `send_audio_message` aceitam o **nome** de um contato salvo no lugar do número.
+- Pode ser editada à mão, pelos comandos `wpp save`/`wpp forget` ou pela aba **Contatos** do indicador do GNOME.
+- `wpp find` mostra a agenda primeiro; `wpp send`, `send-file` e `audio` aceitam o **nome** de um contato salvo no lugar do número.
 - Telefones são normalizados para só dígitos; números BR com 10 ou 11 dígitos ganham o `55`.
-- **Importar do celular:** no app Contatos, Gerenciar contatos → Exportar → `.vcf`, e peça ao Claude para rodar `import_contacts_vcf` com o caminho do arquivo. Entradas já existentes não são sobrescritas.
+- **Importar do celular:** no app Contatos, Gerenciar contatos → Exportar → `.vcf`, e rode `wpp import-vcf <arquivo>`. Entradas já existentes não são sobrescritas.
 
 ### Envio e recebimento de mídia
 
-**Enviando:** imagens/vídeos/documentos via `send_file`; mensagens de voz via `send_audio_message` (com ffmpeg, qualquer formato é convertido pra `.ogg` opus automaticamente; sem ffmpeg, dá pra mandar o áudio bruto via `send_file`, mas sem aparecer como mensagem de voz).
+**Enviando:** imagens/vídeos/documentos via `wpp send-file`; mensagens de voz via `wpp audio` (com ffmpeg, qualquer formato é convertido pra `.ogg` opus automaticamente; sem ffmpeg, dá pra mandar o áudio bruto via `send_file`, mas sem aparecer como mensagem de voz).
 
-**Recebendo:** só os metadados ficam salvos por padrão — o arquivo só é baixado quando você pede pro Claude usar `download_media`, passando `message_id` e `chat_jid`.
+**Recebendo:** só os metadados ficam salvos por padrão — o arquivo só é baixado com `wpp media <message_id> <chat>`. (A 403 em mídias do WhatsApp foi corrigida no bridge: a URL perdia a query string.)
 
 ## Segurança e privacidade
 
 - A API REST do bridge (porta `9090` por padrão) só escuta em `127.0.0.1` — não é alcançável pela rede.
 - Mesmo em localhost, ela **não tem autenticação** — qualquer processo seu consegue chamá-la. Não exponha essa porta (ex.: não faça port-forward/tunnel dela).
-- `send_file`/`send_audio_message` aceitam qualquer caminho de arquivo local que o processo consiga ler — tenha isso em mente ao dar ao Claude acesso a diretórios sensíveis junto com este MCP (ver aviso da "lethal trifecta" no topo).
+- `wpp send-file`/`audio` só enviam de `~` (fora de pastas ocultas) e `/tmp`; antes aceitavam qualquer caminho de arquivo local que o processo consiga ler — tenha isso em mente ao dar ao Claude acesso a diretórios sensíveis junto com este MCP (ver aviso da "lethal trifecta" no topo).
 - Os logs do bridge (via `journalctl`, se rodando como serviço) não incluem o texto das mensagens, só metadados.
 
 ## Como funciona por baixo dos panos
 
-1. O Claude manda a requisição para o servidor MCP em Python.
-2. O servidor MCP consulta o bridge em Go (via HTTP, porta configurável por `WHATSAPP_BRIDGE_PORT`) ou lê direto do SQLite.
+1. O agente (ou você) roda o `wpp`.
+2. O `wpp` consulta o bridge em Go (via HTTP, porta configurável por `WHATSAPP_BRIDGE_PORT`) ou lê direto do SQLite.
 3. O bridge em Go mantém a conexão com a API do WhatsApp e o banco atualizado.
-4. Os dados voltam pela mesma cadeia até o Claude.
-5. Para enviar mensagens, o fluxo é o inverso: Claude → servidor MCP → bridge Go → WhatsApp.
+4. Os dados voltam em JSON.
+5. Para enviar: `wpp` → bridge Go → WhatsApp, com a trava de segurança (`wpp reply` confere modo e contato por código).
 
 ## Solução de problemas
 
@@ -294,12 +282,15 @@ Para problemas de integração com o Claude Desktop, veja a [documentação ofic
 MIT — veja [LICENSE](./LICENSE). Baseado no trabalho original de [Luke Harries](https://github.com/lharries/whatsapp-mcp).
 
 
-## Novidades (branch feat/melhorias-mcp)
+## Novidades
 
-- **Tom por contato**: `set_contact_profile`, `get_contact_profile` e `prepare_message` (perfil + conversa recente, sem enviar).
-- **Leitura enxuta**: `list_messages` e `list_chats` em formato compacto (cronológico, 50–70% menos tokens nas medições); `read_new_messages` lê só o que chegou desde um cursor.
-- **Busca rápida**: índice FTS5 em arquivo separado (`search_index.db`), criado em segundo plano na primeira busca.
-- **Segurança**: nome ambíguo ou inexistente não envia nada (devolve candidatos); `send_file` só envia de `~` (fora de pastas ocultas) e `/tmp`; ajustável por `WHATSAPP_ALLOWED_SEND_DIRS`.
-- **Modo conversacional**: ver [docs/MODO-CONVERSACIONAL.md](docs/MODO-CONVERSACIONAL.md).
-- **Sessão ao vivo**: conversa conduzida no chat do OpenBot, com painel, aprovação por mensagem ou modo automático e assunto definido pelo dono: [docs/SESSAO-AO-VIVO.md](docs/SESSAO-AO-VIVO.md).
-- `make test` e `make lint` rodam testes e linter do servidor MCP.
+**2026-11-13 — padronização em `wpp` + skill**
+- Todas as ferramentas do MCP viraram comandos do `wpp` (com testes de paridade); o MCP foi arquivado em `_arquivo/mcp/` e desligado no OpenBot e no Claude Code. Motivo: o MCP carregava ~22 definições de ferramenta em todo turno; o `wpp` + skill só custa quando é usado.
+- Mídia: corrigido o 403 no download (a query da URL era descartada).
+- `wpp dedupe` junta contatos duplicados (merge, não apaga).
+- Indicador do GNOME 0.3.0 redesenhado; 110 testes Python + 12 testes JS + testes Go.
+
+**Antes**
+- Tom por contato, leitura enxuta (50–70% menos tokens), busca FTS5, segurança de envio.
+- **Modo conversacional**: [docs/MODO-CONVERSACIONAL.md](docs/MODO-CONVERSACIONAL.md). **Sessão ao vivo**: [docs/SESSAO-AO-VIVO.md](docs/SESSAO-AO-VIVO.md).
+- `make test` e `make lint` rodam testes e linter do núcleo.

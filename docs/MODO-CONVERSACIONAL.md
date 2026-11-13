@@ -26,15 +26,21 @@ O vigia **não envia nada** e **não escreve** no banco do bridge: só acorda o 
 ## Configurar (uma vez)
 
 1. Defina como escrever para cada contato e quem pode ser respondido (ferramentas do MCP):
-   `set_contact_profile(contact="Ana", tone="informal e curto", address_as="Aninha", reply_mode="draft")`
+   `wpp contact "Ana" --tone "informal e curto" --address-as "Aninha" --mode draft --context "assunto da conversa"`
 2. Crie no OpenBot uma rotina **pausada** (ativa = falso) com a instrução abaixo, no agente que você escolher, e anote `agent_id` e `routine_id`.
-3. `conversation_mode(agent_id="...", routine_id="...")` e depois `conversation_mode(enabled=true)`
+3. `wpp auto config --agent-id ... --routine-id ...` e depois `wpp auto on`
    (ou o interruptor "Modo conversacional" no indicador GNOME).
 4. `make conv-install && make conv-start` sobe o vigia.
 
-Desligar: `conversation_mode(enabled=false)`, o interruptor do indicador ou `make conv-stop`.
+Desligar: `wpp auto off`, o interruptor do indicador ou `make conv-stop`.
 
-## Instrução sugerida para a rotina
+## Instrução da rotina (atualizado 2026-11-12)
+
+As regras deixaram de ficar coladas na rotina: moram na skill **"Envio de mensagens WhatsApp"**, seção "Modo conversacional" (fonte: `~/OpenBot/Shared/instrucoes/skills/whatsapp/SKILL.md`), habilitada no agente WhatsApp Conversacional. A rotina só manda seguir a skill e, se ela não carregar, rascunhar sem enviar. Novidades: o `reply_mode` é confirmado com `get_contact_profile` (não se confia no payload) e o modo auto passa por uma checagem de 7 itens antes de enviar.
+
+O texto antigo abaixo fica como referência histórica.
+
+## Instrução sugerida (versão antiga) para a rotina
 
 > Você foi acionado pelo modo conversacional do WhatsApp do dono. O payload traz o contato, o chat_jid, o `reply_mode` e o cursor.
 > 1. Leia as mensagens novas com `read_new_messages(cursor=<cursor do payload>, chat_jid=<chat_jid>, include_from_me=true)`.
@@ -49,3 +55,7 @@ Desligar: `conversation_mode(enabled=false)`, o interruptor do indicador ou `mak
 - O vigia precisa estar de pé; se parar, nada é acordado (mensagens ficam no histórico e são lidas depois pelo cursor).
 - Limite por hora e debounce vivem na memória do vigia: reiniciar zera o contador de limite.
 - O interruptor do indicador GNOME foi validado só com `node --check`, não dentro do Shell.
+
+## Envio automático com trava em código (2026-11-12)
+No modo `auto` o agente NÃO usa `send_message`: usa `~/tools/scripts/wpp reply <chat_jid> "<texto>"` (`whatsapp-mcp-server/wpp_cli.py`, funções `check_auto_reply` e `auto_reply`). O código só envia se TUDO valer: modo conversacional ligado, chat 1:1, contato da agenda com `reply_mode=auto`, texto até 400 caracteres, sem assunto sensível (mesma lista da sessão ao vivo), sem link nem número longo e no máximo 8 por hora por conversa. Qualquer falha devolve `blocked` e o agente relata como rascunho. Limite conhecido: o `send_message` do MCP continua existindo e não passa por essa trava; a proteção depende de a skill mandar usar o `wpp reply`.
+Contexto da conversa: `set_contact_profile(contact, context="assunto combinado")`.

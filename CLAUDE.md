@@ -4,11 +4,11 @@
 
 Ao iniciar qualquer conversa neste projeto:
 
-1. Leia o índice de memória: `~/.claude/projects/-home-eltobsjr-tools-wpp-mcp/memory/MEMORY.md`
+1. Leia o índice de memória: `~/.claude/projects/-home-eltobsjr-tools-automacao-wpp-mcp/memory/MEMORY.md`
    É um índice — siga os links para os arquivos relevantes à tarefa atual.
 
 2. Leia o devtrack mais recente:
-   `ls /home/eltobsjr/tools/wpp-mcp/WppMcpSecondBrain/devtrack/ | sort | tail -1`
+   `ls /home/eltobsjr/tools/automacao/wpp-mcp/WppMcpSecondBrain/devtrack/ | sort | tail -1`
    e leia o arquivo retornado. Isso garante continuidade: o que foi feito,
    decisões tomadas e pendências abertas na última sessão.
 
@@ -23,19 +23,19 @@ Ao iniciar qualquer conversa neste projeto:
 ## 3. Estrutura do projeto
 
 - `whatsapp-bridge/` — bridge Go: conecta no WhatsApp, guarda histórico em SQLite (`store/`), expõe `/api/send`, `/api/download`, `/api/status`.
-- `whatsapp-mcp-server/` — servidor MCP Python: as ferramentas que o Claude chama (`whatsapp.py` tem a lógica, `main.py` registra as tools do FastMCP).
+- `whatsapp-mcp-server/` — núcleo Python (`whatsapp.py`, `contacts.py`, `conversation.py`, `live.py`) e o comando `wpp` (`wpp_cli.py`; wrapper em `bin/wpp`). **O servidor MCP foi arquivado em 2026-11-13** (`_arquivo/mcp/`); a interface padrão é o `wpp` + a skill. Leia `docs/GUIA.md`.
 - `gnome-indicator/` — extensão GNOME Shell: liga/desliga o bridge via `systemctl --user`, consulta `/api/status` pra saber se está de fato conectado (não só "processo rodando"), abre logs, notifica erro.
 - `install.sh` / `bootstrap.sh` / `Makefile` — instalação e atalhos do dia a dia (`make status`, `make logs`, `make restart`, `make uninstall`).
 
 ### Como os três componentes se relacionam
 
 ```
-Claude ──MCP(stdio)──▶ whatsapp-mcp-server ──HTTP :9090──▶ whatsapp-bridge ──▶ WhatsApp
+Agentes/Claude ──skill + comando wpp──▶ núcleo Python ──HTTP :9090──▶ whatsapp-bridge ──▶ WhatsApp
                                                                     ▲
                                         gnome-indicator ── systemctl + /api/status
 ```
 
-- O **servidor MCP** só fala com o **bridge** (HTTP + leitura direta do SQLite) — nunca com o indicador.
+- O **núcleo Python** (usado pelo `wpp` e pelo vigia) só fala com o **bridge** (HTTP + leitura direta do SQLite) — nunca com o indicador.
 - O **indicador** só fala com o **systemd** (liga/desliga o processo) e com o **bridge** (`/api/status`, pra saber o estado real de conexão) — nunca com o servidor MCP.
 - O **bridge** é o único componente com estado persistente (sessão do WhatsApp + histórico); os outros dois são "burros" em relação a isso.
 - Porta do bridge é configurável via `WHATSAPP_BRIDGE_PORT` (padrão `9090`) — lida tanto pelo Go quanto pelo Python, pra não dessincronizar de novo (já aconteceu uma vez).
