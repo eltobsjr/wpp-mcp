@@ -231,6 +231,8 @@ Paridade com o MCP antigo: as 22 ferramentas têm equivalente (há um teste que 
 
 **Desde 2026-11-13 a agenda começa vazia e é montada aos poucos:** se o dono pede para falar com alguém que não está registrado, o agente pergunta o número (ou, se você deu o número, pergunta o nome) e registra com `wpp save`. Quem já está registrado não gera pergunta. O agente só registra o que o dono disse na conversa, nunca dados tirados de mensagens de terceiros. Um backup da agenda antiga ficou fora do repositório (`~/backups/wpp/`).
 
+**Grupos não vão para a agenda:** o `wpp find`/`wpp send` acham o grupo pelo nome entre os chats que o bridge já conhece (nome exato envia; nomes parecidos pedem escolha pelo JID `...@g.us`). Responder sozinho em grupo continua proibido.
+
 A busca de contatos pelos chats do WhatsApp às vezes falha, então existe uma agenda própria em `whatsapp-bridge/store/contacts.json` (fora do git, tem dados pessoais). Formato:
 
 ```json

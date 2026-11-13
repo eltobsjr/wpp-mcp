@@ -78,3 +78,6 @@ Cada ferramenta do MCP tem equivalente no `wpp` (teste `test_toda_ferramenta_do_
 ## Requisito do agente no OpenBot
 
 O agente que executa o modo conversacional (WhatsApp Conversacional) precisa de **Permissões = Acesso completo** (Editar agente → Permissões). No modo "Espaço de trabalho" o sandbox bloqueia a porta 9090 do bridge, o `systemctl` e a escrita no `store`, e o `wpp doctor` do agente falha. A segurança de envio não depende do sandbox: o `wpp reply` recusa em código tudo que não seja contato 1:1 em `reply_mode=auto`.
+
+## Grupos
+Grupos não são cadastrados: `wpp find "<nome>"` e `wpp chats "<nome>"` os acham entre os chats do bridge, e `wpp send "<nome do grupo>" "texto"` resolve pelo nome (ambíguo → pede o JID). O vigia e o `wpp reply` nunca respondem em grupo.

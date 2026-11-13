@@ -417,6 +417,12 @@ def find(query, limit=10):
     ]
     if saved:
         return saved[:limit]
+    groups = [
+        {"name": g["name"], "phone": None, "jid": g["phone"], "source": "grupo"}
+        for g in saved_contacts.group_chats(query)
+    ]
+    if groups:
+        return groups[:limit]
     found = [_plain(c) for c in search_contacts(query)[:limit]]
     return [
         {"name": c.get("name"), "phone": c.get("phone_number"), "jid": c.get("jid"), "source": "whatsapp"}

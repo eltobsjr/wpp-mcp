@@ -398,4 +398,31 @@ def test_nome_desconhecido_orienta_a_perguntar_o_numero():
 
     with pytest.raises(saved.RecipientError) as e:
         saved.resolve("Fulano Inexistente")
-    assert "Pergunte o número" in str(e.value) and "wpp save" in str(e.value)
+    assert "pergunte o número" in str(e.value) and "wpp save" in str(e.value)
+
+
+def _db_com_grupos(tmp_path):
+    import sqlite3
+
+    p = tmp_path / "m.db"
+    c = sqlite3.connect(p)
+    c.execute("CREATE TABLE chats (jid TEXT, name TEXT)")
+    c.executemany("INSERT INTO chats VALUES (?,?)", [
+        ("111@g.us", "Família Souza"), ("222@g.us", "Promoções A"), ("333@g.us", "Promoções B"), ("5511@s.whatsapp.net", "Zé")])
+    c.commit()
+    c.close()
+    return str(p)
+
+
+def test_grupo_resolve_por_nome_e_ambiguo_pede_escolha(tmp_path, monkeypatch):
+    import pytest
+
+    import contacts as saved
+
+    monkeypatch.setattr(saved.config, "MESSAGES_DB_PATH", _db_com_grupos(tmp_path))
+    assert saved.resolve("familia souza") == "111@g.us"
+    assert saved.resolve("Promoções A") == "222@g.us"
+    with pytest.raises(saved.RecipientError):
+        saved.resolve("promocoes")
+    assert [g["name"] for g in saved.group_chats("promocoes")] == ["Promoções A", "Promoções B"]
+    assert saved.group_chats("zé") == []  # só grupos

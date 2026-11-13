@@ -188,6 +188,28 @@ def set_profile(identifier: str, **fields: Optional[str]) -> Dict[str, object]:
 _PHONE_RE = re.compile(r"\+?[\d\s\-()]{8,}")
 
 
+def group_chats(query: str) -> List[Dict[str, str]]:
+    """Grupos (@g.us) conhecidos pelo bridge cujo nome contém todas as palavras da busca.
+    Retorna [{"name", "phone": <jid>}] (o JID vai no campo phone para reaproveitar a exibição)."""
+    import sqlite3
+
+    words = fold(query).split()
+    if not words or not os.path.exists(config.MESSAGES_DB_PATH):
+        return []
+    conn = None
+    try:
+        conn = sqlite3.connect(f"file:{config.MESSAGES_DB_PATH}?mode=ro", uri=True, timeout=2)
+        rows = conn.execute(
+            "SELECT jid, name FROM chats WHERE jid LIKE '%@g.us' AND name IS NOT NULL AND name != ''"
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        if conn is not None:
+            conn.close()
+    return [{"name": n, "phone": j} for j, n in rows if all(w in fold(n) for w in words)]
+
+
 def resolve(recipient: str) -> str:
     """Transforma o destinatário em algo que o bridge aceita: JID (com '@'), telefone
     (só dígitos) ou o telefone de um contato salvo.
@@ -209,9 +231,19 @@ def resolve(recipient: str) -> str:
     if len(exact) > 1:
         raise RecipientError(
             f"Mais de um contato chamado '{recipient}'. Use o telefone.", exact[:5])
+    groups = group_chats(recipient)
+    exact_groups = [g for g in groups if fold(g["name"]) == key]
+    if len(exact_groups) == 1:
+        return exact_groups[0]["phone"]
+    if len(groups) == 1 and not list_contacts(recipient):
+        return groups[0]["phone"]
+    if groups:
+        raise RecipientError(
+            f"Mais de um grupo/contato para '{recipient}'. Escolha pelo JID: "
+            + ", ".join(f"{g['name']} ({g['phone']})" for g in groups[:5]), groups[:5])
     similar = list_contacts(recipient)[:5]
     hint = (" Candidatos: " + ", ".join(f"{c['name']} ({c['phone']})" for c in similar)) if similar else (
-        " Pergunte o número ao dono e registre com: wpp save \"<nome>\" <número>.")
+        " Se for uma pessoa, pergunte o número ao dono e registre com: wpp save \"<nome>\" <número>. Se for grupo, confira o nome com wpp chats \"<nome>\".")
     raise RecipientError(f"Contato '{recipient}' não encontrado na agenda.{hint}", similar)
 
 
