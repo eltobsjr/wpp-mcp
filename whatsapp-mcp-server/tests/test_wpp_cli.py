@@ -331,7 +331,7 @@ def test_doctor_sem_contato_ligado_e_aviso_nao_falha(env, monkeypatch, tmp_path)
     monkeypatch.setattr(conversation, "eligible_contacts", lambda: [])
     monkeypatch.setattr(wpp_cli.config, "AUTOMATION_DIR", str(tmp_path))
     itens = {rot: (ok, crit) for ok, rot, _, crit in wpp_cli.doctor()}
-    assert itens["há contato em draft/auto"] == (False, False)
+    assert itens["contato em draft/auto"] == (False, False)
     assert all(ok for rot, (ok, crit) in itens.items() if crit)
 
 

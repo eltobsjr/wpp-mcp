@@ -22,7 +22,7 @@ test('deriveState: cada combinação de fatos vira um estado', () => {
 });
 
 test('aviso do doctor NÃO vira estado de problema (só falha)', () => {
-    const d = [{status: 'aviso', label: 'há contato em draft/auto'}];
+    const d = [{status: 'aviso', label: 'contato em draft/auto'}];
     assert.equal(deriveState({service: 'active', health: ok, conversation: {enabled: true}, doctor: d, pending: false}), 'convOn');
 });
 
@@ -37,7 +37,7 @@ OK    vigia (wpp-conversation) rodando (ativo)
 OK    modo conversacional ligado (ligado)
 OK    rotina do OpenBot configurada no vigia (configurada)
 FALHA OpenBot aberto e alcançável (abra o OpenBot (sem ele nada é respondido))
-AVISO há contato em draft/auto (wpp contact "<nome>" --mode draft)
+AVISO contato em draft/auto (nenhum ainda: wpp contact "<nome>" --mode draft)
 
 1 problema(s). Corrija os marcados FALHA.`;
 

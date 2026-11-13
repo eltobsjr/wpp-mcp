@@ -263,7 +263,7 @@ def doctor():
     )
     people = conversation.eligible_contacts()
     desc = ", ".join(f"{p['name']}={p['reply_mode']}" for p in people)
-    check(people, "há contato em draft/auto", desc, 'wpp contact "<nome>" --mode draft', critical=False)
+    check(people, "contato em draft/auto", desc, 'nenhum ainda: wpp contact "<nome>" --mode draft', critical=False)
     sent_dir = os.path.dirname(os.path.abspath(_SENT_LOG))
     check(
         os.access(sent_dir, os.W_OK),
