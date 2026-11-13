@@ -167,7 +167,7 @@ def set_profile(identifier: str, **fields: Optional[str]) -> Dict[str, object]:
         contacts = _load()
         target = _find_in(contacts, identifier)
         if target is None:
-            raise RecipientError(f"Contato '{identifier}' não encontrado na agenda. Salve-o antes com save_contact.")
+            raise RecipientError(f"Contato '{identifier}' não encontrado na agenda. Salve-o antes com wpp save.")
         profile = dict(target.get("profile") or {})
         for name, value in fields.items():
             if value is None:
@@ -210,7 +210,8 @@ def resolve(recipient: str) -> str:
         raise RecipientError(
             f"Mais de um contato chamado '{recipient}'. Use o telefone.", exact[:5])
     similar = list_contacts(recipient)[:5]
-    hint = " Candidatos: " + ", ".join(f"{c['name']} ({c['phone']})" for c in similar) if similar else ""
+    hint = (" Candidatos: " + ", ".join(f"{c['name']} ({c['phone']})" for c in similar)) if similar else (
+        " Pergunte o número ao dono e registre com: wpp save \"<nome>\" <número>.")
     raise RecipientError(f"Contato '{recipient}' não encontrado na agenda.{hint}", similar)
 
 

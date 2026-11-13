@@ -390,3 +390,12 @@ def test_busca_acha_apelido_nas_notas(tmp_path, monkeypatch):
     saved.save_contact("Maria Souza", "5511999990001", notes="também salvo como Mariinha")
     achou = saved.list_contacts("mariinha")
     assert [c["name"] for c in achou] == ["Maria Souza"]
+
+def test_nome_desconhecido_orienta_a_perguntar_o_numero():
+    import pytest
+
+    import contacts as saved
+
+    with pytest.raises(saved.RecipientError) as e:
+        saved.resolve("Fulano Inexistente")
+    assert "Pergunte o número" in str(e.value) and "wpp save" in str(e.value)

@@ -37,7 +37,7 @@ Leitura em texto curto; ação em uma linha JSON (`success`, `message` ou `block
 | perfil do contato (aceita `@lid`) | `wpp profile <chat>` |
 | enviar (só com OK do dono) | `wpp send <para> "texto"` · `wpp send-file <para> <caminho>` · `wpp audio <para> <caminho>` |
 | responder sozinho, com travas | `wpp reply <chat> "texto"` (`--check` só simula) |
-| agenda | `wpp agenda [q]` · `wpp save <nome> <tel>` · `wpp forget <nome> --yes` · `wpp import-vcf <arq>` · `wpp dedupe [--apply]` (junta contatos com o mesmo número; simula por padrão e guarda cópia `contacts.json.antes-do-dedupe`) |
+| agenda (começa vazia; o agente pergunta nome/número de quem não está registrado e registra com `save`) | `wpp agenda [q]` · `wpp save <nome> <tel>` · `wpp forget <nome> --yes` · `wpp import-vcf <arq>` · `wpp dedupe [--apply]` (junta contatos com o mesmo número; simula por padrão e guarda cópia `contacts.json.antes-do-dedupe`) |
 | perfil de um contato | `wpp contact "<nome>" --mode off|draft|auto --context "assunto" --tone … --avoid … --language … --signature … [--yes]` |
 | chave geral | `wpp auto status|on|off|config` (`config`: `--debounce`, `--max-per-hour`, `--agent-id`, `--routine-id`) |
 | diagnóstico | `wpp doctor` · `wpp status` · `wpp --version` |

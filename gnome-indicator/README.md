@@ -13,7 +13,7 @@ Um painel único, no padrão visual da família "Indicator" (mesmo do NitroSense
 - **Cabeçalho** — avatar, nome e pílula de estado (ligado, desligado, conectando, erro).
 - **Bridge** — liga/desliga o serviço `whatsapp-bridge.service` (`systemd --user`).
 - **Modo conversacional** — chave geral e chips do que está ativo: vigia, OpenBot e rotina.
-- **Contatos** — só os contatos atendidos aparecem; busque para ver os outros. Clique num contato para escolher **off / rascunho / auto** (automático pede confirmação) e escrever o **assunto da conversa**.
+- **Contatos** — a agenda começa vazia e é montada aos poucos (o agente pergunta e registra); só os contatos atendidos aparecem; busque para ver os outros. Clique num contato para escolher **off / rascunho / auto** (automático pede confirmação) e escrever o **assunto da conversa**.
 - **Rodapé** — Verificar (`wpp doctor`), Logs e Ajustes.
 
 Os dados vêm do comando **`wpp`** (`agenda --full`, `contact`, `auto`, `doctor`), não do MCP — o MCP está arquivado em `_arquivo/mcp/` e o indicador não depende dele.
