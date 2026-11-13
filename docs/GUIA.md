@@ -74,3 +74,7 @@ Cada ferramenta do MCP tem equivalente no `wpp` (teste `test_toda_ferramenta_do_
 
 ## 10. Desenvolvimento
 `make test` (pytest, 106 testes), `make lint` (ruff), `go test ./...` no bridge. Antes de mexer no `wpp`: ler `wpp_cli.py` e `tests/test_wpp_cli.py`. Mudança na skill: editar a fonte, reaplicar pelo Engenheiro do OpenBot e **comparar o texto inteiro** (agentes e pacote instalado). Nunca commitar sem permissão; commits do dono sem `Co-Authored-By`.
+
+## Requisito do agente no OpenBot
+
+O agente que executa o modo conversacional (WhatsApp Conversacional) precisa de **Permissões = Acesso completo** (Editar agente → Permissões). No modo "Espaço de trabalho" o sandbox bloqueia a porta 9090 do bridge, o `systemctl` e a escrita no `store`, e o `wpp doctor` do agente falha. A segurança de envio não depende do sandbox: o `wpp reply` recusa em código tudo que não seja contato 1:1 em `reply_mode=auto`.
