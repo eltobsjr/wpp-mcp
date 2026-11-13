@@ -96,32 +96,12 @@ else
     echo "Sessão já autenticada encontrada em $BRIDGE_DIR/store/ — pulando o QR code."
 fi
 
-step "Registrando o servidor MCP"
-if command -v claude >/dev/null 2>&1; then
-    if claude mcp list 2>/dev/null | grep -q '^whatsapp'; then
-        echo "MCP 'whatsapp' já registrado no Claude Code."
-    elif ask_yes_no "Registrar automaticamente no Claude Code (claude mcp add)?" y; then
-        claude mcp add whatsapp --scope user -- "$(command -v uv)" --directory "$MCP_SERVER_DIR" run main.py
-        echo "Registrado. Confira com: claude mcp list"
-    fi
-else
-    cat <<EOF
-Claude Code (CLI) não encontrado no PATH. Para Claude Desktop ou Cursor,
-adicione manualmente ao arquivo de configuração MCP:
-
-{
-  "mcpServers": {
-    "whatsapp": {
-      "command": "$(command -v uv || echo '{{CAMINHO_DO_UV}}')",
-      "args": ["--directory", "$MCP_SERVER_DIR", "run", "main.py"]
-    }
-  }
-}
-
-Claude Desktop: ~/Library/Application Support/Claude/claude_desktop_config.json (macOS)
-Cursor:         ~/.cursor/mcp.json
-EOF
-fi
+step "Instalando o comando wpp"
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$ROOT/bin/wpp" "$HOME/.local/bin/wpp"
+echo "Comando 'wpp' instalado em ~/.local/bin/wpp (confira com: wpp doctor)."
+echo "O servidor MCP foi arquivado: a interface padrão agora é o comando wpp + a skill."
+echo "Para religar o MCP, veja _arquivo/mcp/README.md."
 
 INSTALLED_SERVICE=0
 if command -v systemctl >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then

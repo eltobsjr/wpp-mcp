@@ -196,7 +196,9 @@ def test_webhook_sem_arquivos_de_automacao(env, tmp_path, monkeypatch):
 
 
 def test_ferramenta_conversation_mode(env):
-    import main
+    from conftest import carregar_mcp
+
+    main = carregar_mcp()
 
     estado = main.conversation_mode()
     assert estado["enabled"] is False and estado["routine_configured"] is True

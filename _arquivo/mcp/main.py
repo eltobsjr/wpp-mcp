@@ -1,3 +1,10 @@
+# ARQUIVADO em 2026-11-13: o MCP foi desligado e substituído por skill + `wpp` (ver README.md desta pasta).
+# Este arquivo continua funcionando se for religado; o núcleo fica em ../../whatsapp-mcp-server.
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "whatsapp-mcp-server"))
+
 from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -136,8 +143,10 @@ def get_contact_profile(contact: str) -> Dict[str, Any]:
     Args:
         contact: Nome exato ou telefone de um contato da agenda
     """
+    # JID (@lid ou @s.whatsapp.net) vira telefone: sem isso um chat @lid nunca achava o contato salvo.
+    ident = (identity.phone_of(contact) or contact) if "@" in contact else contact
     try:
-        profile = saved_contacts.get_profile(contact)
+        profile = saved_contacts.get_profile(ident)
     except saved_contacts.RecipientError as e:
         return {"success": False, "message": str(e), "candidates": e.candidates}
     if profile is None:

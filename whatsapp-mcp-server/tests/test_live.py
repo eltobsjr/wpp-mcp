@@ -21,6 +21,7 @@ def s(store, agenda, tmp_path, monkeypatch):
         def fake(recipient, msg):
             calls.append((recipient, msg))
             return store.send_ok, "ok" if store.send_ok else "sem rede"
+
         return real(text, how, sender=fake, now=now)
 
     store.send_ok = True

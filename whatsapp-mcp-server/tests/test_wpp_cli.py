@@ -1,0 +1,383 @@
+"""wpp_cli: trava do envio automático e registro do que é enviado pela API (o bridge não o grava)."""
+
+import json
+import time
+
+import pytest
+
+import contacts
+import conversation
+import wpp_cli
+
+AUTO = "5589999990001"
+DRAFT = "5589999990002"
+
+
+@pytest.fixture
+def env(agenda, tmp_path, monkeypatch):
+    agenda(
+        [
+            {"name": "Ana Auto", "phone": AUTO, "notes": "", "profile": {"reply_mode": "auto"}},
+            {"name": "Duda Draft", "phone": DRAFT, "notes": "", "profile": {"reply_mode": "draft"}},
+        ]
+    )
+    monkeypatch.setattr(wpp_cli, "_SENT_LOG", str(tmp_path / "sent_log.json"))
+    monkeypatch.setattr(wpp_cli, "_AUTO_STATE", str(tmp_path / "auto_replies.json"))
+    monkeypatch.setattr(conversation, "load", lambda: {"enabled": True})
+    monkeypatch.setattr(wpp_cli.identity, "phone_of", lambda jid: jid.split("@")[0])
+    sent = []
+    return sent, (lambda chat, text: sent.append((chat, text)) or (True, "ok"))
+
+
+def jid(phone):
+    return f"{phone}@s.whatsapp.net"
+
+
+def test_reply_passa_no_caso_simples_e_registra(env):
+    sent, sender = env
+    r = wpp_cli.auto_reply(jid(AUTO), "Oi! Tudo bem por aqui.", sender=sender)
+    assert r["success"] and len(sent) == 1
+    assert wpp_cli.sent_for(jid(AUTO))[0]["text"] == "Oi! Tudo bem por aqui."
+
+
+@pytest.mark.parametrize(
+    "chat,text,motivo",
+    [
+        (jid(DRAFT), "oi", "reply_mode"),
+        ("120363000000000001@g.us", "oi", "1:1"),
+        (jid("5589888880000"), "oi", "agenda"),
+        (jid(AUTO), "me manda o pix", "sensível"),
+        (jid(AUTO), "veja http://x.co/a", "link"),
+        (jid(AUTO), "liga 89994364683", "número longo"),
+        (jid(AUTO), "a" * 401, "400"),
+        (jid(AUTO), "   ", "vazio"),
+    ],
+)
+def test_reply_bloqueia(env, chat, text, motivo):
+    sent, sender = env
+    r = wpp_cli.auto_reply(chat, text, sender=sender)
+    assert not r["success"] and sent == []
+    assert any(motivo in m for m in r["blocked"])
+
+
+def test_reply_bloqueia_com_modo_desligado(env, monkeypatch):
+    sent, sender = env
+    monkeypatch.setattr(conversation, "load", lambda: {"enabled": False})
+    assert not wpp_cli.auto_reply(jid(AUTO), "oi", sender=sender)["success"] and sent == []
+
+
+def test_limite_por_hora_bloqueia_o_nono(env):
+    sent, sender = env
+    t0 = time.time()
+    for i in range(wpp_cli.AUTO_MAX_PER_HOUR):
+        assert wpp_cli.auto_reply(jid(AUTO), f"ok {i}", sender=sender, now=t0 + i)["success"]
+    r = wpp_cli.auto_reply(jid(AUTO), "mais um", sender=sender, now=t0 + 10)
+    assert not r["success"] and len(sent) == wpp_cli.AUTO_MAX_PER_HOUR
+
+
+def test_registro_casa_nome_telefone_e_jid(env):
+    wpp_cli.log_sent("Ana Auto", "pelo nome", "manual")  # `wpp send "Ana Auto"` registra o nome
+    wpp_cli.log_sent(AUTO, "pelo número", "manual")
+    wpp_cli.log_sent(jid(AUTO), "pelo jid", "auto")
+    for consulta in ("Ana Auto", AUTO, jid(AUTO), "52480574513257@lid".replace("52480574513257", AUTO)):
+        assert [m["text"] for m in wpp_cli.sent_for(consulta)] == ["pelo nome", "pelo número", "pelo jid"]
+
+
+def test_registro_nao_mistura_conversas(env):
+    wpp_cli.log_sent(AUTO, "da Ana", "manual")
+    wpp_cli.log_sent(DRAFT, "da Duda", "manual")
+    assert [m["text"] for m in wpp_cli.sent_for(AUTO)] == ["da Ana"]
+
+
+def test_profile_acha_contato_por_lid_nome_e_telefone(env):
+    for ident in (AUTO, jid(AUTO), "Ana Auto"):
+        r = wpp_cli.profile_of(ident)
+        assert r["found"] and r["reply_mode"] == "auto"
+    assert wpp_cli.profile_of(jid(DRAFT))["reply_mode"] == "draft"
+    assert wpp_cli.profile_of("5500000000000@s.whatsapp.net")["found"] is False
+
+
+def test_timeline_mistura_os_dois_lados_em_ordem(env, tmp_path, monkeypatch):
+    import sqlite3
+
+    db = tmp_path / "messages.db"
+    con = sqlite3.connect(db)
+    con.executescript(
+        "CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TEXT,"
+        " is_from_me BOOLEAN, media_type TEXT);"
+    )
+    con.execute(
+        "INSERT INTO messages VALUES ('1', ?, 'x', 'Oi filho foi bem', '2026-11-12 23:17:40-03:00', 0, NULL)",
+        (jid(AUTO),),
+    )
+    con.execute(
+        "INSERT INTO messages VALUES ('2', ?, 'x', 'Nada não, dormi', '2026-11-12 23:26:40-03:00', 0, NULL)",
+        (jid(AUTO),),
+    )
+    con.commit()
+    con.close()
+    monkeypatch.setattr(wpp_cli.identity, "equivalent_jids", lambda c: {c})
+    from datetime import datetime
+
+    wpp_cli.log_sent(
+        AUTO, "Como foi seu dia?", "manual", now=datetime.fromisoformat("2026-11-12 23:17:29-03:00").timestamp()
+    )
+    wpp_cli.log_sent(
+        AUTO, "O que a senhora fez hoje?", "manual", now=datetime.fromisoformat("2026-11-12 23:26:28-03:00").timestamp()
+    )
+    textos = [x[2] for x in wpp_cli.timeline(jid(AUTO), 10, db_path=str(db))]
+    assert textos == ["Como foi seu dia?", "Oi filho foi bem", "O que a senhora fez hoje?", "Nada não, dormi"]
+
+
+def test_edit_contact_auto_exige_confirmacao(env):
+    r = wpp_cli.edit_contact("Duda Draft", mode="auto")
+    assert not r["success"] and "--yes" in r["message"]
+    assert contacts.get_profile("Duda Draft")["reply_mode"] == "draft"
+    assert wpp_cli.edit_contact("Duda Draft", mode="auto", yes=True)["profile"]["reply_mode"] == "auto"
+
+
+def test_edit_contact_muda_contexto_sem_tocar_no_modo(env):
+    r = wpp_cli.edit_contact("Ana Auto", context="combinar o churrasco")
+    assert r["success"] and r["profile"]["context"] == "combinar o churrasco" and r["profile"]["reply_mode"] == "auto"
+
+
+def test_edit_contact_inexistente(env):
+    assert not wpp_cli.edit_contact("Ninguém")["success"]
+
+
+def test_set_auto_exige_rotina_configurada(env, monkeypatch):
+    estado = {"enabled": False, "agent_id": "", "routine_id": ""}
+    monkeypatch.setattr(conversation, "load", lambda: estado)
+    monkeypatch.setattr(conversation, "set_enabled", lambda v: estado.update(enabled=v))
+    assert not wpp_cli.set_auto(True)["success"]
+    estado.update(agent_id="a", routine_id="r")
+    assert wpp_cli.set_auto(True) == {"success": True, "enabled": True}
+    assert wpp_cli.set_auto(False)["enabled"] is False
+
+
+def test_doctor_aponta_o_que_falta(env, monkeypatch, tmp_path):
+    monkeypatch.setattr(wpp_cli, "_http_ok", lambda *a, **k: False)
+    monkeypatch.setattr(wpp_cli, "_service_active", lambda n: False)
+    monkeypatch.setattr(conversation, "load", lambda: {"enabled": False, "agent_id": "", "routine_id": ""})
+    monkeypatch.setattr(wpp_cli.config, "AUTOMATION_DIR", str(tmp_path / "nada"))
+    falhas = [rot for ok, rot, _, _ in wpp_cli.doctor() if not ok]
+    assert "bridge do WhatsApp responde" in falhas
+    assert "vigia (wpp-conversation) rodando" in falhas
+    assert "modo conversacional ligado" in falhas
+    assert "OpenBot aberto e alcançável" in falhas
+
+
+def test_doctor_tudo_certo(env, monkeypatch, tmp_path):
+    (tmp_path / "url").write_text("http://127.0.0.1:1/")
+    monkeypatch.setattr(wpp_cli, "_http_ok", lambda *a, **k: True)
+    monkeypatch.setattr(wpp_cli, "_service_active", lambda n: True)
+    monkeypatch.setattr(conversation, "load", lambda: {"enabled": True, "agent_id": "a", "routine_id": "r"})
+    monkeypatch.setattr(wpp_cli.config, "AUTOMATION_DIR", str(tmp_path))
+    assert all(ok for ok, _, _, _ in wpp_cli.doctor())
+
+
+def test_get_contact_profile_do_mcp_acha_por_jid(env):
+    from conftest import carregar_mcp
+
+    main = carregar_mcp()
+    r = main.get_contact_profile(jid(AUTO))
+    assert r["success"] and r["profile"]["reply_mode"] == "auto"
+    assert main.get_contact_profile("5500000000000@s.whatsapp.net")["success"] is False
+
+
+# ---------------- paridade com o MCP e comandos portados ----------------
+
+# toda ferramenta do MCP precisa ter um comando equivalente no wpp (ou estar coberta por composição)
+PARIDADE = {
+    "search_contacts": "find",
+    "list_saved_contacts": "agenda",
+    "save_contact": "save",
+    "remove_saved_contact": "forget",
+    "import_contacts_vcf": "import-vcf",
+    "set_contact_profile": "contact",
+    "get_contact_profile": "profile",
+    "prepare_message": "thread",  # perfil + histórico: wpp profile + wpp thread
+    "conversation_mode": "auto",
+    "list_messages": "msgs",
+    "read_new_messages": "new",
+    "list_chats": "chats",
+    "get_contact_chats": "chats",
+    "get_chat": "chat",
+    "get_direct_chat_by_contact": "chat",
+    "get_last_interaction": "last",
+    "get_message_context": "context",
+    "read_message_log": "log",
+    "send_message": "send",
+    "send_file": "send-file",
+    "send_audio_message": "audio",
+    "download_media": "media",
+}
+
+
+def _comandos():
+    import argparse
+
+    sub = [a for a in wpp_cli.build_parser()._actions if isinstance(a, argparse._SubParsersAction)][0]
+    return set(sub.choices)
+
+
+def test_toda_ferramenta_do_mcp_tem_equivalente_no_wpp():
+    import asyncio
+
+    from conftest import carregar_mcp
+
+    main = carregar_mcp()
+
+    tools = {t.name for t in asyncio.run(main.mcp.list_tools())}
+    assert tools - set(PARIDADE) == set(), "ferramenta nova no MCP sem equivalente mapeado no wpp"
+    assert set(PARIDADE.values()) <= _comando_set()
+
+
+def _comando_set():
+    return _comandos()
+
+
+def test_alias_contacts_e_versao():
+    p = wpp_cli.build_parser()
+    assert p.parse_args(["contacts"]).cmd == "contacts"  # alias aceito; run() trata como agenda
+    assert wpp_cli.VERSION.count(".") == 2
+
+
+def test_send_path_bloqueia_chave_ssh_e_banco_do_bridge(env, tmp_path):
+    import os
+
+    for caminho in (os.path.expanduser("~/.ssh/id_ed25519"), str(tmp_path / "messages.db")):
+        r = wpp_cli.send_path(jid(AUTO), caminho, file_sender=lambda *a: (True, "ENVIOU"))
+        assert r["success"] is False
+
+
+def test_send_path_envia_arquivo_normal_e_registra(env, tmp_path):
+    arq = tmp_path / "foto.txt"
+    arq.write_text("x")
+    enviados = []
+    r = wpp_cli.send_path(jid(AUTO), str(arq), file_sender=lambda d, p: enviados.append(p) or (True, "ok"))
+    assert r["success"] and len(enviados) == 1
+    assert wpp_cli.sent_for(AUTO)[-1]["text"] == "[arquivo] foto.txt"
+    a = wpp_cli.send_path(jid(AUTO), str(arq), audio=True, audio_sender=lambda d, p: (True, "ok"))
+    assert a["success"] and wpp_cli.sent_for(AUTO)[-1]["text"] == "[áudio] foto.txt"
+
+
+def test_send_path_recusa_pasta_oculta(env):
+    import os
+
+    r = wpp_cli.send_path(jid(AUTO), os.path.expanduser("~/.cache/qualquer.txt"), file_sender=lambda *a: (True, "x"))
+    assert r["success"] is False
+
+
+def test_forget_exige_yes_e_save_grava(env):
+    assert wpp_cli.save_contact("Novo Nome", "5589999990009")["success"]
+    assert not wpp_cli.forget_contact("Novo Nome")["success"]
+    assert contacts.find_contact("Novo Nome") is not None
+    assert wpp_cli.forget_contact("Novo Nome", yes=True)["success"]
+    assert contacts.find_contact("Novo Nome") is None
+    assert not wpp_cli.forget_contact("Novo Nome", yes=True)["success"]
+
+
+def test_find_prioriza_agenda(env):
+    r = wpp_cli.find("Ana")
+    assert r and r[0]["source"] == "agenda" and r[0]["phone"] == AUTO
+
+
+def test_edit_contact_idioma_e_assinatura(env):
+    r = wpp_cli.edit_contact("Ana Auto", language="en", signature="— Elton")
+    assert r["profile"]["language"] == "en" and r["profile"]["signature"] == "— Elton"
+
+
+def test_configure_auto(env, monkeypatch):
+    estado = {"enabled": False, "debounce_seconds": 20, "max_triggers_per_hour": 6, "agent_id": "", "routine_id": ""}
+    monkeypatch.setattr(conversation, "load", lambda: estado)
+    monkeypatch.setattr(conversation, "update", lambda **k: estado.update(k))
+    r = wpp_cli.configure_auto(debounce=30, max_per_hour=4, agent_id="a", routine_id="r")
+    assert r["debounce_seconds"] == 30 and r["max_triggers_per_hour"] == 4 and r["routine_configured"]
+
+
+def test_message_context_marca_a_mensagem_pedida(env, monkeypatch):
+    from datetime import datetime
+
+    from whatsapp import Message, MessageContext
+
+    def msg(i, txt, me=False):
+        return Message(datetime(2026, 11, 12, 23, 17, i), "Contato", txt, me, "c@s", str(i))
+
+    ctx = MessageContext(message=msg(2, "meio"), before=[msg(1, "antes")], after=[msg(3, "depois", True)])
+    monkeypatch.setattr(wpp_cli, "get_message_context", lambda *a: ctx)
+    linhas = wpp_cli.message_context("2")
+    assert [x.split(": ", 1)[1] for x in linhas] == ["antes", "meio", "depois"]
+    assert linhas[1].startswith(">>") and linhas[2].endswith("depois") and "EU:" in linhas[2]
+
+
+def test_main_transforma_erro_em_recusa_limpa(capsys, monkeypatch):
+    def explode(a):
+        raise ValueError("Message with ID 0 not found")
+
+    monkeypatch.setattr(wpp_cli, "run", explode)
+    with pytest.raises(SystemExit) as e:
+        wpp_cli.main(["last", "x"])
+    assert e.value.code == 1
+    saida = json.loads(capsys.readouterr().out)
+    assert saida["success"] is False and "not found" in saida["message"]
+
+
+def test_doctor_sem_contato_ligado_e_aviso_nao_falha(env, monkeypatch, tmp_path):
+    (tmp_path / "url").write_text("http://127.0.0.1:1/")
+    monkeypatch.setattr(wpp_cli, "_http_ok", lambda *a, **k: True)
+    monkeypatch.setattr(wpp_cli, "_service_active", lambda n: True)
+    monkeypatch.setattr(conversation, "load", lambda: {"enabled": True, "agent_id": "a", "routine_id": "r"})
+    monkeypatch.setattr(conversation, "eligible_contacts", lambda: [])
+    monkeypatch.setattr(wpp_cli.config, "AUTOMATION_DIR", str(tmp_path))
+    itens = {rot: (ok, crit) for ok, rot, _, crit in wpp_cli.doctor()}
+    assert itens["há contato em draft/auto"] == (False, False)
+    assert all(ok for rot, (ok, crit) in itens.items() if crit)
+
+
+# ---------------- dedupe de contatos ----------------
+
+
+def _ag(*itens):
+    return [
+        {"name": n, "phone": p, "notes": nt, "profile": pf} if pf else {"name": n, "phone": p, "notes": nt}
+        for n, p, nt, pf in itens
+    ]
+
+
+def test_dedupe_junta_mesmo_numero_com_e_sem_9_e_com_zero():
+    ag = _ag(
+        ("Maria Souza", "558988880001", "", None),
+        ("Mariinha", "5589988880001", "", None),
+        ("Maria Souza", "089988880001", "", None),
+        ("Outra", "5589999990001", "", None),
+    )
+    nova, juntados, _ = wpp_cli.dedupe_plan(ag)
+    assert len(nova) == 2 and len(juntados) == 1
+    unido = [c for c in nova if c["phone"] == "5589988880001"][0]  # mantém o formato canônico com 9
+    assert "também salvo como" in unido["notes"]
+
+
+def test_dedupe_nao_junta_mesmo_nome_com_numero_diferente():
+    ag = _ag(("Breno", "558988880002", "", None), ("Breno", "558988880003", "", None))
+    nova, juntados, avisos = wpp_cli.dedupe_plan(ag)
+    assert len(nova) == 2 and juntados == [] and len(avisos) == 1
+
+
+def test_dedupe_preserva_perfil_e_usa_o_modo_mais_restritivo():
+    ag = _ag(
+        ("Caio", "5581988880004", "", {"tone": "informal", "reply_mode": "auto"}),
+        ("O Bom", "558188880004", "amigo", {"context": "futebol", "reply_mode": "draft"}),
+    )
+    nova, juntados, _ = wpp_cli.dedupe_plan(ag)
+    assert len(nova) == 1
+    perfil = nova[0]["profile"]
+    assert perfil["tone"] == "informal" and perfil["context"] == "futebol" and perfil["reply_mode"] == "draft"
+    assert "amigo" in nova[0]["notes"]
+
+
+def test_dedupe_simula_por_padrao_e_so_grava_com_apply(env):
+    agenda_path = contacts.CONTACTS_PATH
+    antes = open(agenda_path, encoding="utf-8").read()
+    r = wpp_cli.dedupe()
+    assert r["applied"] is False and open(agenda_path, encoding="utf-8").read() == antes

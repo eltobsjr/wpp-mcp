@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# wpp — WhatsApp pelo bridge local (comandos, travas e modo conversacional). Guia: docs/GUIA.md.
+# Resolve o repositório pelo próprio arquivo, então funciona por symlink (~/tools/scripts/wpp, ~/.local/bin/wpp).
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+D="$(dirname "$(dirname "$SELF")")/whatsapp-mcp-server"
+CODE="import sys; sys.path.insert(0, '$D'); import wpp_cli; wpp_cli.main()"
+if [ -x "$D/.venv/bin/python" ]; then exec "$D/.venv/bin/python" -c "$CODE" "$@"; fi
+exec uv --directory "$D" run python -c "$CODE" "$@"

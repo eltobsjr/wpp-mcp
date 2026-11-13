@@ -49,7 +49,8 @@ class FakeStore:
         self.conn.execute(
             "INSERT INTO messages(id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (f"M{self._n}", chat_jid, sender, content, ts, from_me, media, filename))
+            (f"M{self._n}", chat_jid, sender, content, ts, from_me, media, filename),
+        )
         self.conn.commit()
         return f"M{self._n}"
 
@@ -71,3 +72,15 @@ def store(tmp_path, monkeypatch):
     identity.invalidate()
     yield fake
     fake.conn.close()
+
+
+def carregar_mcp():
+    """Carrega o MCP arquivado (_arquivo/mcp/main.py): serve para testar paridade e a camada de ferramentas."""
+    import importlib.util
+    import os
+
+    caminho = os.path.join(os.path.dirname(__file__), "..", "..", "_arquivo", "mcp", "main.py")
+    spec = importlib.util.spec_from_file_location("mcp_arquivado", os.path.abspath(caminho))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
