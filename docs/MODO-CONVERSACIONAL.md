@@ -8,9 +8,9 @@ Responde conversas de forma contínua, com liga/desliga. **Vem desligado e não 
 mensagem chega -> bridge grava em messages.db
    -> vigia (wpp-conversation.service) detecta, espera a conversa assentar (debounce)
    -> acorda uma rotina do OpenBot
-   -> o agente lê (read_new_messages), redige no tom do contato (prepare_message) e
+   -> o agente lê (`wpp thread`), redige no tom do contato (perfil: `wpp profile`) e
         reply_mode "draft": só relata o rascunho a você
-        reply_mode "auto":  envia com send_message
+        reply_mode "auto":  envia com `wpp reply` (com as travas em código)
 ```
 
 O vigia **não envia nada** e **não escreve** no banco do bridge: só acorda o agente.
@@ -25,7 +25,7 @@ O vigia **não envia nada** e **não escreve** no banco do bridge: só acorda o 
 
 ## Configurar (uma vez)
 
-1. Defina como escrever para cada contato e quem pode ser respondido (ferramentas do MCP):
+1. Defina como escrever para cada contato e quem pode ser respondido (comando `wpp`):
    `wpp contact "Ana" --tone "informal e curto" --address-as "Aninha" --mode draft --context "assunto da conversa"`
 2. Crie no OpenBot uma rotina **pausada** (ativa = falso) com a instrução abaixo, no agente que você escolher, e anote `agent_id` e `routine_id`.
 3. `wpp auto config --agent-id ... --routine-id ...` e depois `wpp auto on`
@@ -36,11 +36,13 @@ Desligar: `wpp auto off`, o interruptor do indicador ou `make conv-stop`.
 
 ## Instrução da rotina (atualizado 2026-11-12)
 
-As regras deixaram de ficar coladas na rotina: moram na skill **"Envio de mensagens WhatsApp"**, seção "Modo conversacional" (fonte: `~/OpenBot/Shared/instrucoes/skills/whatsapp/SKILL.md`), habilitada no agente WhatsApp Conversacional. A rotina só manda seguir a skill e, se ela não carregar, rascunhar sem enviar. Novidades: o `reply_mode` é confirmado com `get_contact_profile` (não se confia no payload) e o modo auto passa por uma checagem de 7 itens antes de enviar.
+As regras deixaram de ficar coladas na rotina: moram na skill **"Envio de mensagens WhatsApp"**, seção "Modo conversacional" (fonte: `~/OpenBot/Shared/instrucoes/skills/whatsapp/SKILL.md`), habilitada no agente WhatsApp Conversacional. A rotina só manda seguir a skill e, se ela não carregar, rascunhar sem enviar. Novidades: o `reply_mode` é confirmado com `wpp profile` (não se confia no payload) e o modo auto passa por uma checagem de 7 itens antes de enviar.
 
 O texto antigo abaixo fica como referência histórica.
 
 ## Instrução sugerida (versão antiga) para a rotina
+
+> **Só histórico — não usar.** Cita ferramentas do MCP arquivado (`read_new_messages`, `prepare_message`, `send_message`). Hoje vale a skill (acima) e o `wpp`.
 
 > Você foi acionado pelo modo conversacional do WhatsApp do dono. O payload traz o contato, o chat_jid, o `reply_mode` e o cursor.
 > 1. Leia as mensagens novas com `read_new_messages(cursor=<cursor do payload>, chat_jid=<chat_jid>, include_from_me=true)`.
@@ -57,5 +59,5 @@ O texto antigo abaixo fica como referência histórica.
 - O interruptor do indicador GNOME foi validado só com `node --check`, não dentro do Shell.
 
 ## Envio automático com trava em código (2026-11-12)
-No modo `auto` o agente NÃO usa `send_message`: usa `~/tools/scripts/wpp reply <chat_jid> "<texto>"` (`whatsapp-mcp-server/wpp_cli.py`, funções `check_auto_reply` e `auto_reply`). O código só envia se TUDO valer: modo conversacional ligado, chat 1:1, contato da agenda com `reply_mode=auto`, texto até 400 caracteres, sem assunto sensível (mesma lista da sessão ao vivo), sem link nem número longo e no máximo 8 por hora por conversa. Qualquer falha devolve `blocked` e o agente relata como rascunho. Limite conhecido: o `send_message` do MCP continua existindo e não passa por essa trava; a proteção depende de a skill mandar usar o `wpp reply`.
-Contexto da conversa: `set_contact_profile(contact, context="assunto combinado")`.
+No modo `auto` o agente NÃO usa `wpp send`: usa `~/tools/scripts/wpp reply <chat_jid> "<texto>"` (`whatsapp-mcp-server/wpp_cli.py`, funções `check_auto_reply` e `auto_reply`). O código só envia se TUDO valer: modo conversacional ligado, chat 1:1, contato da agenda com `reply_mode=auto`, texto até 400 caracteres, sem assunto sensível (mesma lista da sessão ao vivo), sem link nem número longo e no máximo 8 por hora por conversa. Qualquer falha devolve `blocked` e o agente relata como rascunho. Limite conhecido: o `send_message` do MCP continua existindo e não passa por essa trava; a proteção depende de a skill mandar usar o `wpp reply`.
+Contexto da conversa: `wpp contact "<nome>" --context "assunto combinado"`.

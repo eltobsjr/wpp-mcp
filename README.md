@@ -43,7 +43,7 @@ agente (skill) ──▶ wpp (CLI) ──▶ núcleo Python ──HTTP :9090─�
             vigia (wpp-conversation.service) ── aciona o agente      indicador GNOME ── systemctl + /api/status + wpp
 ```
 
-- O **indicador GNOME** usa o `wpp` e o `systemd`: controla o `systemd` (liga/desliga o processo) e consulta `/api/status` direto no bridge, pelas mesmas portas usadas pelo servidor MCP.
+- O **indicador GNOME** usa o `wpp` e o `systemd`: controla o `systemd` (liga/desliga o processo) e consulta `/api/status` direto no bridge, pela mesma porta (`WHATSAPP_BRIDGE_PORT`) que o `wpp` usa.
 - O **`wpp`** é um processo curto, chamado a cada comando. O **bridge** é quem precisa ficar rodando continuamente pra manter a sessão do WhatsApp — é ele que o systemd/indicador controlam.
 
 ### Armazenamento
@@ -124,22 +124,20 @@ wpp doctor
 
 O servidor MCP original está arquivado em `_arquivo/mcp/` (com instruções para religar). O guia completo está em [`docs/GUIA.md`](docs/GUIA.md).
 
-Salve como `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop, macOS) ou `~/.cursor/mcp.json` (Cursor).
-
 **3. (Opcional) Serviço systemd**
 
 Crie `~/.config/systemd/user/whatsapp-bridge.service`:
 
 ```ini
 [Unit]
-Description=WhatsApp MCP Bridge (whatsmeow)
+Description=WhatsApp Bridge (whatsmeow)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/caminho/para/whatsapp-mcp/whatsapp-bridge
-ExecStart=%h/caminho/para/whatsapp-mcp/whatsapp-bridge/wa-bridge-bin
+WorkingDirectory=%h/caminho/para/wpp-mcp/whatsapp-bridge
+ExecStart=%h/caminho/para/wpp-mcp/whatsapp-bridge/wa-bridge-bin
 Restart=on-failure
 RestartSec=5
 
@@ -236,13 +234,14 @@ A busca de contatos pelos chats do WhatsApp às vezes falha, então existe uma a
 ```
 
 - Pode ser editada à mão, pelos comandos `wpp save`/`wpp forget` ou pela aba **Contatos** do indicador do GNOME.
+- **Nome desconhecido não vira palpite:** `wpp send` resolve só por número/JID, nome exato da agenda ou nome de grupo. Pessoa que não está na agenda dá erro que manda perguntar o número ao dono e registrar com `wpp save`; o `wpp` não escolhe "o primeiro parecido" dos chats (isso era do `search_contacts` do MCP antigo).
 - `wpp find` mostra a agenda primeiro; `wpp send`, `send-file` e `audio` aceitam o **nome** de um contato salvo no lugar do número.
 - Telefones são normalizados para só dígitos; números BR com 10 ou 11 dígitos ganham o `55`.
 - **Importar do celular:** no app Contatos, Gerenciar contatos → Exportar → `.vcf`, e rode `wpp import-vcf <arquivo>`. Entradas já existentes não são sobrescritas.
 
 ### Envio e recebimento de mídia
 
-**Enviando:** imagens/vídeos/documentos via `wpp send-file`; mensagens de voz via `wpp audio` (com ffmpeg, qualquer formato é convertido pra `.ogg` opus automaticamente; sem ffmpeg, dá pra mandar o áudio bruto via `send_file`, mas sem aparecer como mensagem de voz).
+**Enviando:** imagens/vídeos/documentos via `wpp send-file`; mensagens de voz via `wpp audio` (com ffmpeg, qualquer formato é convertido pra `.ogg` opus automaticamente; sem ffmpeg, dá pra mandar o áudio bruto via `wpp send-file`, mas sem aparecer como mensagem de voz).
 
 **Recebendo:** só os metadados ficam salvos por padrão — o arquivo só é baixado com `wpp media <message_id> <chat>`. (A 403 em mídias do WhatsApp foi corrigida no bridge: a URL perdia a query string.)
 
@@ -250,7 +249,7 @@ A busca de contatos pelos chats do WhatsApp às vezes falha, então existe uma a
 
 - A API REST do bridge (porta `9090` por padrão) só escuta em `127.0.0.1` — não é alcançável pela rede.
 - Mesmo em localhost, ela **não tem autenticação** — qualquer processo seu consegue chamá-la. Não exponha essa porta (ex.: não faça port-forward/tunnel dela).
-- `wpp send-file`/`audio` só enviam de `~` (fora de pastas ocultas) e `/tmp`; antes aceitavam qualquer caminho de arquivo local que o processo consiga ler — tenha isso em mente ao dar ao Claude acesso a diretórios sensíveis junto com este MCP (ver aviso da "lethal trifecta" no topo).
+- `wpp send-file`/`audio` só enviam de `~` (fora de pastas ocultas) e `/tmp`; antes aceitavam qualquer caminho de arquivo local que o processo consiga ler — tenha isso em mente ao dar ao Claude acesso a diretórios sensíveis junto com este projeto (ver aviso da "lethal trifecta" no topo).
 - Os logs do bridge (via `journalctl`, se rodando como serviço) não incluem o texto das mensagens, só metadados.
 
 ## Como funciona por baixo dos panos
@@ -264,7 +263,7 @@ A busca de contatos pelos chats do WhatsApp às vezes falha, então existe uma a
 ## Solução de problemas
 
 - Se der erro de permissão ao rodar o `uv`, adicione-o ao `PATH` ou use o caminho completo do executável.
-- O **bridge precisa estar rodando** (via `go run`/binário, serviço systemd, ou ligado pelo indicador) para haver dados — o servidor MCP sozinho não faz nada.
+- O **bridge precisa estar rodando** (via `go run`/binário, serviço systemd, ou ligado pelo indicador) para haver dados — o `wpp` sozinho só mostra o que já está no histórico.
 
 ### Problemas de autenticação
 
@@ -275,14 +274,14 @@ A busca de contatos pelos chats do WhatsApp às vezes falha, então existe uma a
 - **WhatsApp fora de sincronia**: apague `whatsapp-bridge/store/messages.db` e `whatsapp-bridge/store/whatsapp.db` e reinicie o bridge para reautenticar do zero.
 - **Indicador mostra "sem sessão" (amarelo) mesmo com o serviço ativo**: normalmente é a sessão expirada (~20 dias) — use "Ver logs" pra confirmar, e rode o bridge em primeiro plano uma vez pra reescanear o QR code.
 
-Para problemas de integração com o Claude Desktop, veja a [documentação oficial do MCP](https://modelcontextprotocol.io/quickstart/server#claude-for-desktop-integration-issues).
-
 ## Licença
 
 MIT — veja [LICENSE](./LICENSE). Baseado no trabalho original de [Luke Harries](https://github.com/lharries/whatsapp-mcp).
 
 
 ## Novidades
+
+**2026-11-13 (revisão de docs e instruções)** — restos do MCP antigo removidos (README, CLAUDE.md, `docs/MODO-CONVERSACIONAL.md`); fluxo de destinatário descrito conforme o código; conferido que os 3 agentes com WhatsApp usam só a skill v9 + `wpp` (nenhum MCP de WhatsApp). Registro em `~/tools/docs/2026-11-13-whatsapp-padronizacao.md`.
 
 **2026-11-13 (noite)** — citar, reagir, editar, apagar e marcar como lido; grupos no vigia (só rascunho); arquivo no modo auto com permissão e pasta fixa; mídia de canal e mídia própria baixam; contatos com vários números; grupos achados por nome. Veja [docs/FUNCIONALIDADES.md](docs/FUNCIONALIDADES.md).
 

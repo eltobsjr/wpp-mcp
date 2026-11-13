@@ -15,7 +15,7 @@ Ao iniciar qualquer conversa neste projeto:
 ## 2. Stack e tecnologias
 
 - **Go 1.25** (`whatsapp-bridge/`) — client WhatsApp via [whatsmeow](https://github.com/tulir/whatsmeow), SQLite via `mattn/go-sqlite3` (sem ORM, SQL cru), API REST própria (`net/http`) só em `127.0.0.1`.
-- **Python 3.11+ / uv** (`whatsapp-mcp-server/`) — servidor MCP via `mcp[cli]` (FastMCP), fala com o bridge por HTTP (`requests`) e lê o SQLite direto.
+- **Python 3.11+ / uv** (`whatsapp-mcp-server/`) — núcleo e comando `wpp`; fala com o bridge por HTTP (`requests`) e lê o SQLite direto. O servidor MCP (`mcp[cli]`/FastMCP) foi arquivado em `_arquivo/mcp/`.
 - **GJS / GNOME Shell 45–50** (`gnome-indicator/`) — extensão de indicador na barra superior (`PanelMenu.Button`), sem gschema/prefs (é só o toggle).
 - **systemd** (serviço de usuário) — mantém o bridge rodando; autostart habilitado por padrão (sobe sozinho a cada login).
 - **Bash** — `install.sh` (instalador guiado), `bootstrap.sh` (one-liner `curl | bash`), `Makefile` (atalhos).
@@ -58,5 +58,5 @@ Formato dos logs: `YYYY-MM-DD - Título.md`
 1. Ler memória e devtrack mais recente
 2. Entender o contexto antes de implementar
 3. Implementar
-4. Rodar `go build` (bridge) / `python3 -m py_compile` (mcp-server) / `node --check` (indicador) no que for tocado
+4. Rodar `go build` (bridge) / `python3 -m py_compile` (núcleo Python) / `node --check` (indicador) no que for tocado
 5. Atualizar devtrack ao final da sessão
